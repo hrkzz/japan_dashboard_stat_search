@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+openai
+faiss-cpu
+scikit-learn
+litellm
+rank-bm25
+loguru 
