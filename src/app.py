@@ -121,22 +121,20 @@ def get_indicator_details(indicator_name):
         return None
 
 def display_indicator_card(indicator_data, recommendation_reason, category_key, indicator_index):
-    """単一の指標情報をカード形式で表示する"""
+    """単一の指標情報をカード形式で表示する（ボタンを右寄せ）"""
     if not indicator_data:
         st.error("指標データが無効です")
         return
 
     with st.container():
-        col_icon, col_content, col_actions = st.columns([0.3, 5.0, 0.7])
-
-        with col_icon:
-            st.markdown("📊")
+        # 左のコンテンツ列と右のアクション列を作成
+        col_content, col_actions = st.columns([5, 1])
 
         with col_content:
             indicator_code = indicator_data.get("koumoku_code", "")
             st.markdown(
                 f'<div class="indicator-title">{indicator_data["koumoku_name_full"]} '
-                f'<span class="indicator-code">{indicator_code.lstrip("#")}</span></div>',
+                f'<span class="indicator-code">{indicator_code}</span></div>',
                 unsafe_allow_html=True
             )
             st.markdown(
@@ -151,22 +149,12 @@ def display_indicator_card(indicator_data, recommendation_reason, category_key, 
 
         with col_actions:
             base_url = "https://app.powerbi.com/groups/f57d1ec6-4658-47f7-9a93-08811e43127f/reports/1accacdd-98d0-4d03-9b25-48f4c9673ff4/02fa5822008e814cf7f2?experience=power-bi"
+            power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{indicator_data.get('koumoku_code', '')}'"
             
-            # URL生成時に '#' を取り除く
-            indicator_code = indicator_data.get("koumoku_code", "")
-            cleaned_indicator_code = indicator_code.lstrip('#')
-            power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{cleaned_indicator_code}'"
-
-            action_col1, action_col2 = st.columns(2)
-            with action_col1:
-                if st.button("📋", key=f"copy_{category_key}_{indicator_index}", help="Power BI URLをコピー"):
-                    pyperclip.copy(power_bi_url)
-                    st.toast("Power BI URLをコピーしました！", icon="📋")
-            with action_col2:
-                st.markdown(
-                    f'<div style="text-align: center; padding-top: 5px;"><a href="{power_bi_url}" target="_blank" rel="noopener noreferrer" title="Power BIを新しいタブで開く">🔗</a></div>',
-                    unsafe_allow_html=True
-                )
+            # ボタンを少し下に配置するためのスペーサー
+            st.markdown('<div style="height: 25px;"></div>', unsafe_allow_html=True)
+            st.link_button("🔗 Power BI", power_bi_url, help="Power BIを新しいタブで開きます")
+        
         st.markdown('<hr style="margin: 4px 0; border: 0.5px solid #e0e0e0;">', unsafe_allow_html=True)
 
 def display_ai_analysis_results(analysis_result, original_query):
@@ -222,6 +210,7 @@ def main():
     """アプリケーションのメインロジック"""
     st.title("社会・人口統計指標検索システム")
 
+    # 不要なCSSを削除し、スッキリさせる
     st.markdown("""
         <style>
         .main > div { padding-top: 2rem; }
@@ -266,24 +255,23 @@ def main():
     )
 
     if analyze_button and query.strip():
-        with st.spinner("🤖 AIが質問を分析し、最適な統計指標を検索中..."):
-            with st.status("分析進行状況", expanded=True) as status:
-                status.update(label="📝 質問を解釈しています...", state="running")
+        with st.status("分析進行状況", expanded=True) as status:
+            status.update(label="📝 質問を解釈しています...", state="running")
+            time.sleep(0.5)
+            status.update(label="🔍 関連指標を検索しています...", state="running")
+            
+            analysis_result = generate_ai_analysis(query.strip())
+            
+            if analysis_result:
+                status.update(label="📊 指標を整理しています...", state="running")
                 time.sleep(0.5)
-                status.update(label="🔍 関連指標を検索しています...", state="running")
-                
-                analysis_result = generate_ai_analysis(query.strip())
-                
-                if analysis_result:
-                    status.update(label="📊 指標を整理しています...", state="running")
-                    time.sleep(0.5)
-                    st.session_state.analysis_result = analysis_result
-                    st.session_state.original_query = query.strip()
-                    status.update(label="✅ 分析完了!", state="complete")
-                else:
-                    status.update(label="❌ 分析失敗", state="error")
-                    if 'analysis_result' in st.session_state:
-                        del st.session_state.analysis_result
+                st.session_state.analysis_result = analysis_result
+                st.session_state.original_query = query.strip()
+                status.update(label="✅ 分析完了!", state="complete")
+            else:
+                status.update(label="❌ 分析失敗", state="error")
+                if 'analysis_result' in st.session_state:
+                    del st.session_state.analysis_result
     
     if 'analysis_result' in st.session_state:
         st.markdown("---")
