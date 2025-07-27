@@ -8,3 +8,4 @@ litellm
 rank-bm25
 loguru
 requests
+pyperclip
