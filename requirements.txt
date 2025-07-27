@@ -6,4 +6,5 @@ faiss-cpu
 scikit-learn
 litellm
 rank-bm25
-loguru 
+loguru
+requests
