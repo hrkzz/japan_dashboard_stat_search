@@ -7,78 +7,76 @@ from sklearn.metrics.pairwise import cosine_similarity
 import streamlit as st
 import json
 import os
-from typing import List, Dict, Tuple, Optional
-
+import requests
+import zipfile
+from io import BytesIO
+from typing import List, Dict, Tuple
 from encoder import EmbeddingConfig
 from loguru import logger
+
+@st.cache_data(ttl=3600) # 1時間キャッシュする
+def load_db_from_github(zip_url: str):
+    """
+    GitHub Releasesからzipをダウンロードし、中のファイルをメモリにロードする。
+    """
+    logger.info(f"⬇️ GitHub Releasesからデータベースをダウンロード開始: {zip_url}")
+    try:
+        response = requests.get(zip_url)
+        response.raise_for_status()  # HTTPエラーがあれば例外を発生
+
+        with zipfile.ZipFile(BytesIO(response.content)) as z:
+            # zipファイル内のファイル名を特定
+            parquet_filename = next(name for name in z.namelist() if name.endswith('processed_data.parquet'))
+            faiss_filename = next(name for name in z.namelist() if name.endswith('faiss_index.bin'))
+
+            # ファイルをメモリ上で読み込む
+            with z.open(parquet_filename) as pf:
+                df = pd.read_parquet(pf)
+            
+            with z.open(faiss_filename) as ff:
+                # faissはファイルパスを要求するため、一時ファイルに書き出す
+                temp_faiss_path = "temp_faiss_index.bin"
+                with open(temp_faiss_path, "wb") as f_out:
+                    f_out.write(ff.read())
+                faiss_index = faiss.read_index(temp_faiss_path)
+                os.remove(temp_faiss_path) # 一時ファイルを削除
+
+        logger.info("✅ データベースのダウンロードと読み込みが完了")
+        return df, faiss_index
+
+    except Exception as e:
+        logger.error(f"❌ GitHubからのDBロードエラー: {e}")
+        st.error(f"データベースのダウンロードに失敗しました: {e}")
+        return None, None
 
 class HybridRetriever:
     """ハイブリッド検索（ベクトル検索 + キーワード検索）とリランキングを行うクラス"""
     
     def __init__(self):
         self.df = None
-        self.faiss_index = None
+        self.faiss_index = None # 以前は `index` だったものを `faiss_index` に統一
         self.bm25 = None
         self.tfidf_vectorizer = None
         self.tfidf_matrix = None
-        self.metadata = None
-    
-    def load_vector_database(self, vector_db_dir: str = '../vector_db') -> bool:
-        """ベクトルデータベースとメタデータを読み込む"""
-        try:
-            # 既に読み込み済みの場合はスキップ
-            if (self.df is not None and hasattr(self, 'index') and self.index is not None 
-                and hasattr(self, 'bm25_index') and self.bm25_index is not None):
-                logger.info("🎯 データベースは既に読み込み済み")
-                return True
-                
-            logger.info(f"🔧 データベース読み込み開始: {vector_db_dir}")
-            
-            # メタデータファイルのパス
-            metadata_path = os.path.join(vector_db_dir, 'metadata.json')
-            if not os.path.exists(metadata_path):
-                logger.error(f"❌ メタデータファイルが見つかりません: {metadata_path}")
-                return False
-            
-            # メタデータを読み込み
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                self.metadata = json.load(f)
-            logger.info(f"✅ メタデータ読み込み完了")
-            
-            # Parquetファイルを読み込み
-            parquet_path = os.path.join(vector_db_dir, 'processed_data.parquet')
-            if not os.path.exists(parquet_path):
-                logger.error(f"❌ Parquetファイルが見つかりません: {parquet_path}")
-                return False
-            
-            self.df = pd.read_parquet(parquet_path)
-            logger.info(f"✅ データフレーム読み込み完了: {len(self.df)}行")
-            
-            # FAISSインデックスを読み込み
-            index_path = os.path.join(vector_db_dir, 'faiss_index.bin')
-            if not os.path.exists(index_path):
-                logger.error(f"❌ FAISSインデックスが見つかりません: {index_path}")
-                return False
-            
-            self.index = faiss.read_index(index_path)
-            logger.info(f"✅ FAISSインデックス読み込み完了: {self.index.ntotal}件")
-            
-            # エンベディング設定を初期化
-            self.embedding_config = EmbeddingConfig()
-            logger.info(f"✅ エンベディング設定初期化完了")
-            
-            # キーワード検索用のインデックスを構築
-            self._build_keyword_indices()
-            logger.info(f"✅ キーワードインデックス構築完了")
-            
-            logger.info(f"🎯 データベース読み込み全体完了")
+        self.embedding_config = EmbeddingConfig()
+
+    def load_vector_database(self) -> bool:
+        """GitHub Releasesからベクトルデータベースを読み込む"""
+        if self.df is not None and self.faiss_index is not None:
             return True
-            
-        except Exception as e:
-            logger.error(f"❌ データベース読み込みエラー: {str(e)}")
-            import traceback
-            logger.error(f"❌ スタックトレース: {traceback.format_exc()}")
+
+        # 自身のGitHub ReleasesのURLに書き換えてください
+        zip_url = "https://github.com/hrkzz/japan_dashboard_stat_search/releases/download/v1.0.0/vector_db.zip"
+        
+        # GitHubからDBをロード
+        self.df, self.faiss_index = load_db_from_github(zip_url)
+
+        if self.df is None or self.faiss_index is None:
             return False
+
+        self._build_keyword_indices()
+        logger.info("🎯 データベースの初期化が完了しました")
+        return True
     
     def _build_keyword_indices(self):
         """BM25とTF-IDFインデックスを構築"""
@@ -106,35 +104,27 @@ class HybridRetriever:
     
     def vector_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
         """ベクトル検索を実行"""
-        try:
-            if self.index is None or self.embedding_config is None:
-                logger.error("❌ ベクトル検索: インデックスまたはエンベディング設定が未初期化")
-                return []
-            
-            # クエリのエンベディングを取得
-            query_embedding = self.embedding_config.get_embeddings([query])
-            
-            if query_embedding.size == 0:
-                logger.error("❌ ベクトル検索: クエリエンベディングが取得できませんでした")
-                return []
-            
-            # FAISS検索
-            distances, indices = self.index.search(query_embedding, top_k)
-            
-            # 結果を整形
-            results = []
-            for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
-                if idx != -1:  # 有効なインデックス
-                    similarity = 1.0 / (1.0 + distance)  # 距離を類似度に変換
-                    results.append((idx, similarity))
-            
-            logger.info(f"🔍 ベクトル検索完了: {len(results)}件 (要求:{top_k}件)")
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ ベクトル検索エラー: {str(e)}")
-            st.error(f"ベクトル検索エラー: {str(e)}")
+        if self.faiss_index is None or self.embedding_config is None:
+            logger.error("❌ ベクトル検索: インデックスまたはエンベディング設定が未初期化")
             return []
+
+        query_embedding = self.embedding_config.get_embeddings([query])
+
+        if query_embedding.size == 0:
+            logger.error("❌ ベクトル検索: クエリエンベディングが取得できませんでした")
+            return []
+
+        # FAISS検索
+        distances, indices = self.faiss_index.search(query_embedding, top_k)
+            
+        # 結果を整形
+        results = []
+        for i, (score, idx) in enumerate(zip(distances[0], indices[0])):
+            if idx != -1:  # 有効なインデックス
+                results.append((idx, score))
+            
+        logger.info(f"🔍 ベクトル検索完了: {len(results)}件 (要求:{top_k}件)")
+        return results
     
     def keyword_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
         """BM25キーワード検索を実行"""
