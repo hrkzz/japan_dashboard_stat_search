@@ -33,6 +33,13 @@ def load_db_from_github(zip_url: str):
             with z.open(parquet_filename) as pf:
                 df = pd.read_parquet(pf)
             
+            # group_code列を追加（koumoku_codeの先頭5文字）
+            if 'koumoku_code' in df.columns:
+                df['group_code'] = df['koumoku_code'].astype(str).str[:5]
+                logger.info(f"✅ group_code列を追加しました（{df['group_code'].nunique()}個のグループ）")
+            else:
+                logger.warning("⚠️ koumoku_code列が見つかりません")
+            
             with z.open(faiss_filename) as ff:
                 # faissはファイルパスを要求するため、一時ファイルに書き出す
                 temp_faiss_path = "temp_faiss_index.bin"
