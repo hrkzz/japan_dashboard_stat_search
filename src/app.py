@@ -95,6 +95,7 @@ def generate_analysis_perspectives(query):
 **必須要件**：
 - 4-5個の分析観点を提示してください
 - 各観点は上記の実在する統計指標に基づいている必要があります
+- 丁寧な『ですます調』にしてください
 - JSON形式以外は出力しないでください"""
 
     user_prompt = f"以下の質問について、統計分析の観点から4-5個の分析観点を提示してください：\n\n{query}"
@@ -112,6 +113,117 @@ def generate_analysis_perspectives(query):
     except Exception as e:
         st.error(f"分析観点生成でエラーが発生しました: {str(e)}")
         return None
+
+def generate_dynamic_group_descriptions(user_query, group_list):
+    """ユーザーのクエリに基づいて指標グループの動的説明文を生成する"""
+    logger.info(f"🤖 動的説明文生成開始: '{user_query}' for {len(group_list)} groups")
+    
+    # グループ名リストを作成
+    group_names = [group['title'] for group in group_list]
+    
+    system_prompt = f"""あなたは統計分析の専門家です。ユーザーのクエリに対して、各指標グループがどのような洞察を与えるかを説明してください。
+
+**ユーザーのクエリ**: {user_query}
+
+**指標グループリスト**: {', '.join(group_names)}
+
+各指標グループについて、以下の観点から**より長く、丁寧な『ですます調』**で説明文を生成してください：
+- このグループの指標を見ることで、ユーザーのクエリに対してどのような洞察が得られるか
+- ユーザーがその指標グループを選ぶことで、どのようなことが分析できるのかを具体的に説明
+- なぜこのグループがユーザーの関心事に関連するのか
+- 1つの説明文は80-120文字程度で丁寧に
+
+出力は必ずJSON形式で、以下の構造に従ってください：
+[
+  {{
+    "group_name": "指標グループ名",
+    "description": "ユーザーのクエリに対する洞察の詳細説明"
+  }}
+]
+
+**必須要件**：
+- group_nameは上記リストの指標グループ名と完全に一致させてください
+- descriptionは80-120文字程度で、丁寧な「ですます調」で記述してください
+- ユーザーにとって親切で分かりやすい説明にしてください
+- JSON形式以外は出力しないでください"""
+
+    user_prompt = f"上記の指標グループについて、ユーザーのクエリ「{user_query}」に対する洞察を説明してください。"
+    
+    try:
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        response = llm_config.generate_response(messages, temperature=0.3)
+        
+        logger.info(f"🔍 LLM応答の最初の500文字: {response[:500]}")
+        
+        json_match = re.search(r'\[.*\]', response, re.DOTALL)
+        if json_match:
+            parsed_json = json.loads(json_match.group())
+            logger.info(f"✅ 動的説明文生成成功: {len(parsed_json)}件")
+            return parsed_json
+        else:
+            logger.error(f"❌ 有効なJSONが生成されませんでした: {response[:500]}")
+            return None
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ JSON解析エラー: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ 動的説明文生成エラー: {str(e)}")
+        return None
+
+def generate_indicator_explanations(user_query, indicators_list):
+    """各指標について、ユーザーのクエリとの関連性を説明する動的な文章を生成する"""
+    logger.info(f"🤖 指標説明文生成開始: '{user_query}' for {len(indicators_list)} indicators")
+    
+    # 指標名リストを作成
+    indicator_names = [indicator.get('koumoku_name_full', '') for indicator in indicators_list]
+    
+    system_prompt = f"""あなたは統計分析の専門家です。ユーザーのクエリに対して、各統計指標がなぜ重要なのかを説明してください。
+
+**ユーザーのクエリ**: {user_query}
+
+**統計指標リスト**: {', '.join(indicator_names)}
+
+各統計指標について、以下の観点から簡潔で親切な説明文を生成してください：
+- この指標がユーザーのクエリにどのように関連するのか
+- この指標を見ることで何が分かるのか
+- なぜこの指標が重要なのか
+- 1つの説明文は60-80文字程度で「この指標は...」で始まる丁寧な文章
+
+出力は必ずJSON形式で、以下の構造に従ってください：
+{{
+  "指標名1": "この指標は...",
+  "指標名2": "この指標は...",
+  ...
+}}
+
+**必須要件**：
+- キーは上記リストの指標名と完全に一致させてください
+- 値は60-80文字程度で「この指標は...」で始まる説明文にしてください
+- ユーザーにとって分かりやすく親切な説明にしてください
+- JSON形式以外は出力しないでください"""
+
+    user_prompt = f"上記の統計指標について、ユーザーのクエリ「{user_query}」との関連性を説明してください。"
+    
+    try:
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        response = llm_config.generate_response(messages, temperature=0.3)
+        
+        logger.info(f"🔍 指標説明文LLM応答の最初の500文字: {response[:500]}")
+        
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            parsed_json = json.loads(json_match.group())
+            logger.info(f"✅ 指標説明文生成成功: {len(parsed_json)}件")
+            return parsed_json
+        else:
+            logger.error(f"❌ 有効なJSONが生成されませんでした: {response[:500]}")
+            return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ JSON解析エラー: {str(e)}")
+        return {}
+    except Exception as e:
+        logger.error(f"❌ 指標説明文生成エラー: {str(e)}")
+        return {}
 
 def generate_indicator_groups_for_perspective(perspective_title, available_indicators):
     """選択された観点に基づいて上位指標グループを生成する"""
@@ -143,11 +255,30 @@ def generate_indicator_groups_for_perspective(perspective_title, available_indic
                 group_indicators.append({
                     'group_code': group_code,
                     'title': row['koumoku_name_full'],
-                    'description': f"「{row['koumoku_name_full']}」グループに含まれる全ての関連指標"
+                    'description': f"「{row['koumoku_name_full']}」グループに含まれる全ての関連指標"  # 仮の説明文
                 })
         
-        # 上位20グループに制限
-        group_indicators = group_indicators[:20]
+        # 上位15グループに制限（LLMの処理負荷を考慮）
+        group_indicators = group_indicators[:15]
+        
+        # 動的説明文を生成
+        if group_indicators and st.session_state.original_query:
+            dynamic_descriptions = generate_dynamic_group_descriptions(
+                st.session_state.original_query, 
+                group_indicators
+            )
+            
+            if dynamic_descriptions:
+                # 説明文をマッピング
+                desc_map = {desc['group_name']: desc['description'] for desc in dynamic_descriptions}
+                
+                # 各グループの説明文を動的生成されたものに更新
+                for group in group_indicators:
+                    if group['title'] in desc_map:
+                        group['description'] = desc_map[group['title']]
+                        logger.info(f"✅ 動的説明文適用: {group['title']}")
+                    else:
+                        logger.warning(f"⚠️ 説明文が見つかりません: {group['title']}")
         
         logger.info(f"✅ {len(group_indicators)}個の上位指標グループを生成")
         return {"groups": group_indicators}
@@ -191,7 +322,7 @@ def get_indicator_details(indicator_name):
         st.error(f"指標詳細取得エラー: {str(e)}")
         return None
 
-def display_indicator_card(indicator_data, recommendation_reason, category_key, indicator_index):
+def display_indicator_card(indicator_data, recommendation_reason, category_key, indicator_index, dynamic_explanation=None):
     """単一の指標情報をカード形式で表示する"""
     if not indicator_data:
         st.error("指標データが無効です")
@@ -210,10 +341,19 @@ def display_indicator_card(indicator_data, recommendation_reason, category_key, 
                 f'<span class="indicator-code">{indicator_code.lstrip("#")}</span></div>',
                 unsafe_allow_html=True
             )
-            st.markdown(
-                f'<div class="indicator-reason">💡 {recommendation_reason}</div>',
-                unsafe_allow_html=True
-            )
+            
+            # 動的説明文があれば表示、なければ従来の説明文を使用
+            if dynamic_explanation:
+                st.markdown(
+                    f'<div class="indicator-reason">💡 {dynamic_explanation}</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f'<div class="indicator-reason">💡 {recommendation_reason}</div>',
+                    unsafe_allow_html=True
+                )
+            
             path = f'{indicator_data["bunya_name"]} > {indicator_data["chuubunrui_name"]} > {indicator_data["shoubunrui_name"]}'
             st.markdown(
                 f'<div class="indicator-path">{path}</div>',
@@ -260,7 +400,7 @@ def handle_perspective_selection_stage():
                     add_message_to_history("user", f"{i+1}番目の{option['title']}について詳しく知りたいです")
                     
                     # 選択された観点に基づいて上位指標グループを生成
-                    with st.spinner("🤖 指標グループを生成中..."):
+                    with st.spinner("🤖 指標グループを選択中..."):
                         groups_result = generate_indicator_groups_for_perspective(
                             option['title'], 
                             st.session_state.available_indicators
@@ -375,13 +515,27 @@ def handle_final_stage():
         st.markdown(f"**該当指標数**: {len(st.session_state.selected_group_indicators)}件")
         st.markdown("---")
         
+        # 動的説明文を生成
+        indicator_explanations = {}
+        if st.session_state.original_query:
+            with st.spinner("🤖 各指標の詳細説明を生成中..."):
+                indicator_explanations = generate_indicator_explanations(
+                    st.session_state.original_query,
+                    st.session_state.selected_group_indicators
+                )
+        
         # グループ内の全指標を表示
         for i, indicator_data in enumerate(st.session_state.selected_group_indicators):
+            # 動的説明文を取得
+            indicator_name = indicator_data.get('koumoku_name_full', '')
+            dynamic_explanation = indicator_explanations.get(indicator_name, None)
+            
             display_indicator_card(
                 indicator_data, 
                 f"「{st.session_state.selected_group_code}」グループに属する指標", 
                 "group", 
-                i
+                i,
+                dynamic_explanation=dynamic_explanation
             )
     else:
         st.error("指標グループデータが見つかりません。")
