@@ -31,6 +31,8 @@ def initialize_session_state():
         st.session_state.selected_group_code = None
     if 'selected_group_indicators' not in st.session_state:
         st.session_state.selected_group_indicators = []
+    if 'perspectives_data' not in st.session_state:
+        st.session_state.perspectives_data = None
 
 def add_message_to_history(role, content):
     """チャット履歴にメッセージを追加"""
@@ -71,14 +73,14 @@ def get_available_indicators_for_query(query):
         return f"指標リスト取得エラー: {str(e)}"
 
 def generate_analysis_perspectives(query):
-    """分析観点を生成するプロンプト1"""
+    """分析観点を生成し、各観点に関連する具体的な指標リストも同時に取得"""
     logger.info(f"🤖 分析観点生成開始: '{query}'")
     available_indicators = get_available_indicators_for_query(query)
     st.session_state.available_indicators = available_indicators
     
-    system_prompt = f"""あなたは統計分析の専門家です。ユーザーの質問を分析し、4-5個の分析観点（中項目）を提示してください。
+    system_prompt = f"""あなたは統計分析の専門家です。ユーザーの質問を分析し、4-5個の分析観点（中項目）を提示し、さらに各観点がどの具体的な統計指標に基づいているかも同時に特定してください。
 
-**重要**: 以下の実在する統計指標からのみ観点を設定してください。
+**重要**: 以下の実在する統計指標からのみ観点を設定し、関連指標を選んでください。
 利用可能な統計指標：
 {available_indicators}
 
@@ -87,7 +89,8 @@ def generate_analysis_perspectives(query):
   "perspectives": [
     {{
       "title": "分析観点のタイトル",
-      "description": "この観点で分析する理由の説明"
+      "description": "この観点で分析する理由の説明",
+      "relevant_indicators": ["関連する指標名1", "関連する指標名2", "関連する指標名3"]
     }}
   ]
 }}
@@ -95,10 +98,12 @@ def generate_analysis_perspectives(query):
 **必須要件**：
 - 4-5個の分析観点を提示してください
 - 各観点は上記の実在する統計指標に基づいている必要があります
+- relevant_indicatorsには、上記リストに実在する指標名を3-8個程度含めてください
+- 指標名は上記リストと完全に一致させてください
 - 丁寧な『ですます調』にしてください
 - JSON形式以外は出力しないでください"""
 
-    user_prompt = f"以下の質問について、統計分析の観点から4-5個の分析観点を提示してください：\n\n{query}"
+    user_prompt = f"以下の質問について、統計分析の観点から4-5個の分析観点と、各観点に関連する具体的な指標を提示してください：\n\n{query}"
     
     try:
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
@@ -106,11 +111,14 @@ def generate_analysis_perspectives(query):
         
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
+            result = json.loads(json_match.group())
+            logger.info(f"✅ 分析観点と関連指標を生成: {len(result.get('perspectives', []))}個の観点")
+            return result
         else:
             logger.error(f"❌ 有効なJSONが生成されませんでした: {response[:500]}...")
             return None
     except Exception as e:
+        logger.error(f"❌ 分析観点生成エラー: {str(e)}")
         st.error(f"分析観点生成でエラーが発生しました: {str(e)}")
         return None
 
@@ -225,38 +233,73 @@ def generate_indicator_explanations(user_query, indicators_list):
         logger.error(f"❌ 指標説明文生成エラー: {str(e)}")
         return {}
 
-def generate_indicator_groups_for_perspective(perspective_title, available_indicators):
-    """選択された観点に基づいて上位指標グループを生成する"""
-    logger.info(f"🤖 上位指標グループ生成開始: '{perspective_title}'")
+def generate_indicator_groups_from_relevant_indicators(selected_perspective):
+    """選択された観点の関連指標リストから、厳密に関連する指標グループのみを生成する"""
+    logger.info(f"🤖 厳密な指標グループ生成開始: '{selected_perspective['title']}'")
     
     try:
         if retriever.df is None:
             retriever.load_vector_database()
         
-        # 現在の観点に関連する指標を検索
-        search_results = retriever.hybrid_search(perspective_title, top_k=100)
+        # 選択された観点の関連指標リストを取得
+        relevant_indicators = selected_perspective.get('relevant_indicators', [])
+        if not relevant_indicators:
+            logger.error("❌ 関連指標リストが空です")
+            return None
         
-        # group_codeで重複除去して上位指標グループを取得
-        group_codes = set()
-        for result in search_results:
-            # 検索結果からkoumoku_name_fullでDataFrameを検索
-            df_row = retriever.df[retriever.df['koumoku_name_full'] == result['koumoku_name_full']]
-            if not df_row.empty and 'group_code' in df_row.columns:
-                group_code = df_row.iloc[0]['group_code']
-                if pd.notna(group_code):
-                    group_codes.add(group_code)
+        logger.info(f"🔍 関連指標数: {len(relevant_indicators)}件")
+        
+        # 関連指標に基づいてDataFrameをフィルタリング
+        df_filtered = retriever.df[retriever.df['koumoku_name_full'].isin(relevant_indicators)]
+        
+        # デバッグ：どの指標が見つかったかログ出力
+        found_indicators = df_filtered['koumoku_name_full'].tolist()
+        logger.info(f"🔍 DataFrameで見つかった指標: {found_indicators}")
+        
+        missing_indicators = [ind for ind in relevant_indicators if ind not in found_indicators]
+        if missing_indicators:
+            logger.warning(f"⚠️ DataFrameで見つからなかった指標: {missing_indicators}")
+        
+        if df_filtered.empty:
+            logger.warning("⚠️ 関連指標がDataFrameで見つかりませんでした")
+            return None
+        
+        # group_codeで重複除去して指標グループを取得
+        group_codes = df_filtered['group_code'].dropna().unique()
+        logger.info(f"🔍 関連グループコード: {group_codes.tolist()}")
+        logger.info(f"🔍 関連グループコード数: {len(group_codes)}件")
         
         # 各グループの代表指標（group_codeと同じkoumoku_codeを持つ指標）を取得
         group_indicators = []
         for group_code in sorted(group_codes):
-            representative = retriever.df[retriever.df['koumoku_code'] == group_code]
+            # 型を文字列に統一して比較
+            group_code_str = str(group_code)
+            
+            # まず、group_codeと同じkoumoku_codeを持つ指標を探す
+            representative = retriever.df[retriever.df['koumoku_code'].astype(str) == group_code_str]
+            
             if not representative.empty:
                 row = representative.iloc[0]
+                logger.info(f"✅ 代表指標見つかりました: {group_code_str} -> {row['koumoku_name_full']}")
                 group_indicators.append({
-                    'group_code': group_code,
+                    'group_code': group_code_str,
                     'title': row['koumoku_name_full'],
                     'description': f"「{row['koumoku_name_full']}」グループに含まれる全ての関連指標"  # 仮の説明文
                 })
+            else:
+                # 代表指標が見つからない場合、そのgroup_codeを持つ任意の指標を代表とする
+                logger.warning(f"⚠️ 代表指標が見つかりません: {group_code_str}")
+                fallback_indicators = retriever.df[retriever.df['group_code'].astype(str) == group_code_str]
+                if not fallback_indicators.empty:
+                    row = fallback_indicators.iloc[0]
+                    logger.info(f"🔄 フォールバック指標を使用: {group_code_str} -> {row['koumoku_name_full']}")
+                    group_indicators.append({
+                        'group_code': group_code_str,
+                        'title': f"{row['koumoku_name_full']}関連指標グループ",
+                        'description': f"「{row['koumoku_name_full']}」関連の指標グループ"  # 仮の説明文
+                    })
+                else:
+                    logger.error(f"❌ group_code {group_code_str} に対応する指標が全く見つかりません")
         
         # 上位15グループに制限（LLMの処理負荷を考慮）
         group_indicators = group_indicators[:15]
@@ -280,11 +323,11 @@ def generate_indicator_groups_for_perspective(perspective_title, available_indic
                     else:
                         logger.warning(f"⚠️ 説明文が見つかりません: {group['title']}")
         
-        logger.info(f"✅ {len(group_indicators)}個の上位指標グループを生成")
+        logger.info(f"✅ {len(group_indicators)}個の厳密な指標グループを生成")
         return {"groups": group_indicators}
         
     except Exception as e:
-        logger.error(f"❌ 上位指標グループ生成エラー: {str(e)}")
+        logger.error(f"❌ 厳密な指標グループ生成エラー: {str(e)}")
         return None
 
 
@@ -396,24 +439,33 @@ def handle_perspective_selection_stage():
             
             with col_button:
                 if st.button("選択", key=f"perspective_{i}", type="primary", use_container_width=True):
-                    st.session_state.selected_perspective = option
+                    # perspectives_dataから選択された観点の完全な情報を取得
+                    selected_perspective = None
+                    if st.session_state.perspectives_data and 'perspectives' in st.session_state.perspectives_data:
+                        for perspective in st.session_state.perspectives_data['perspectives']:
+                            if perspective['title'] == option['title']:
+                                selected_perspective = perspective
+                                break
+                    
+                    if not selected_perspective:
+                        st.error("選択された観点の詳細情報が見つかりません。")
+                        return
+                    
+                    st.session_state.selected_perspective = selected_perspective
                     add_message_to_history("user", f"{i+1}番目の{option['title']}について詳しく知りたいです")
                     
-                    # 選択された観点に基づいて上位指標グループを生成
-                    with st.spinner("🤖 指標グループを選択中..."):
-                        groups_result = generate_indicator_groups_for_perspective(
-                            option['title'], 
-                            st.session_state.available_indicators
-                        )
+                    # 選択された観点の関連指標から厳密に指標グループを生成
+                    with st.spinner("🤖 関連する指標グループを抽出中..."):
+                        groups_result = generate_indicator_groups_from_relevant_indicators(selected_perspective)
                         
                         if groups_result and 'groups' in groups_result and groups_result['groups']:
                             st.session_state.current_options = groups_result['groups']
                             st.session_state.stage = STAGE_GROUP_SELECTION
                             add_message_to_history("assistant", 
-                                f"「{option['title']}」ですね。より具体的な指標グループを以下から選択してください。")
+                                f"「{option['title']}」ですね。この観点に関連する指標グループを以下から選択してください。")
                         else:
                             logger.error(f"❌ 指標グループ生成結果が無効: {groups_result}")
-                            st.error("指標グループの生成に失敗しました。もう一度お試しください。")
+                            st.error("関連する指標グループが見つかりませんでした。もう一度お試しください。")
                     st.rerun()
             
             # 下段：説明文
@@ -430,9 +482,8 @@ def handle_group_selection_stage():
         if st.button("🔄 指標グループを再生成", key="regenerate_groups"):
             # 指標グループを再生成
             with st.spinner("🤖 指標グループを再生成中..."):
-                groups_result = generate_indicator_groups_for_perspective(
-                    perspective['title'], 
-                    st.session_state.available_indicators
+                groups_result = generate_indicator_groups_from_relevant_indicators(
+                    st.session_state.selected_perspective
                 )
                 if groups_result and 'groups' in groups_result:
                     st.session_state.current_options = groups_result['groups']
@@ -457,7 +508,7 @@ def handle_group_selection_stage():
                     # DataFrameから該当グループの全指標を取得
                     if retriever.df is not None:
                         group_indicators = retriever.df[
-                            retriever.df['group_code'] == selected_group_code
+                            retriever.df['group_code'].astype(str) == str(selected_group_code)
                         ].copy()
                         
                         if not group_indicators.empty:
@@ -484,7 +535,7 @@ def handle_group_selection_stage():
 def reset_session_state():
     """セッション状態をリセットして新しい検索を開始"""
     logger.info("🔄 セッション状態をリセット")
-    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators']:
+    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'perspectives_data']:
         if key in st.session_state:
             del st.session_state[key]
     
@@ -557,6 +608,8 @@ def process_user_input(user_input):
             perspectives_result = generate_analysis_perspectives(user_input)
             
             if perspectives_result and 'perspectives' in perspectives_result:
+                # 生成された観点データ全体を保存
+                st.session_state.perspectives_data = perspectives_result
                 st.session_state.current_options = perspectives_result['perspectives']
                 st.session_state.original_query = user_input
                 st.session_state.stage = STAGE_PERSPECTIVE_SELECTION

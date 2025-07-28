@@ -35,6 +35,7 @@ def load_db_from_github(zip_url: str):
             
             # group_code列を追加（koumoku_codeの先頭5文字）
             if 'koumoku_code' in df.columns:
+                # koumoku_codeを文字列型に変換してから先頭5文字を取得
                 df['group_code'] = df['koumoku_code'].astype(str).str[:5]
                 logger.info(f"✅ group_code列を追加しました（{df['group_code'].nunique()}個のグループ）")
             else:
