@@ -274,51 +274,48 @@ def handle_perspective_selection_stage():
     """観点選択段階：分析観点を提示してユーザーに選択してもらう"""
     st.markdown("### 🎯 分析観点の選択")
     st.markdown(f"「{st.session_state.original_query}」について、どのような観点で分析しますか？")
-    st.markdown("以下の選択肢からボタンを押してください。")
+    st.markdown("以下の選択肢から選択ボタンを押してください。")
     
     for i, option in enumerate(st.session_state.current_options):
-        # カード形式の美しいデザイン
-        st.markdown(f"""
-        <div class="selection-card" style="padding: 20px; margin: 16px 0; border-radius: 12px; border: 2px solid #e8f4fd; background: linear-gradient(135deg, #ffffff 0%, #f8fcff 100%); box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-            <div class="card-title" style="color: #1f77b4; font-weight: 600; font-size: 1.1em; margin-bottom: 8px;">
-                {i+1}. {option['title']}
-            </div>
-            <div class="card-description" style="color: #666; font-size: 0.9em; line-height: 1.4;">
-                {option['description']}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # ボタンを中央に配置
-        col1, col2, col3 = st.columns([2, 1, 2])
-        with col2:
-            if st.button("この観点を選択", key=f"perspective_{i}", type="primary", use_container_width=True):
-                st.session_state.selected_perspective = option
-                add_message_to_history("user", f"{i+1}番目の{option['title']}について詳しく知りたいです")
-                
-                # 選択された観点に基づいて指標を生成
-                with st.spinner("🤖 指標を生成中..."):
-                    indicators_result = generate_indicators_for_perspective(
-                        option['title'], 
-                        st.session_state.available_indicators
-                    )
+        # 枠線で囲まれたカード
+        with st.container(border=True):
+            # 上段：タイトルと選択ボタン
+            col_title, col_button = st.columns([4, 1])
+            
+            with col_title:
+                st.markdown(f"**{i+1}. {option['title']}**")
+            
+            with col_button:
+                if st.button("選択", key=f"perspective_{i}", type="primary", use_container_width=True):
+                    st.session_state.selected_perspective = option
+                    add_message_to_history("user", f"{i+1}番目の{option['title']}について詳しく知りたいです")
                     
-                    if indicators_result and 'indicators' in indicators_result and indicators_result['indicators']:
-                        st.session_state.current_options = indicators_result['indicators']
-                        st.session_state.stage = STAGE_INDICATOR_SELECTION
-                        add_message_to_history("assistant", 
-                            f"「{option['title']}」ですね。さらに具体的な指標をご案内します。")
-                    else:
-                        logger.error(f"❌ 指標生成結果が無効: {indicators_result}")
-                        st.error("指標の生成に失敗しました。もう一度お試しください。")
-                st.rerun()
+                    # 選択された観点に基づいて指標を生成
+                    with st.spinner("🤖 指標を生成中..."):
+                        indicators_result = generate_indicators_for_perspective(
+                            option['title'], 
+                            st.session_state.available_indicators
+                        )
+                        
+                        if indicators_result and 'indicators' in indicators_result and indicators_result['indicators']:
+                            st.session_state.current_options = indicators_result['indicators']
+                            st.session_state.stage = STAGE_INDICATOR_SELECTION
+                            add_message_to_history("assistant", 
+                                f"「{option['title']}」ですね。さらに具体的な指標をご案内します。")
+                        else:
+                            logger.error(f"❌ 指標生成結果が無効: {indicators_result}")
+                            st.error("指標の生成に失敗しました。もう一度お試しください。")
+                    st.rerun()
+            
+            # 下段：説明文
+            st.markdown(option['description'])
 
 def handle_indicator_selection_stage():
     """指標選択段階：具体的な指標を提示してユーザーに選択してもらう"""
     perspective = st.session_state.selected_perspective
     st.markdown("### 📈 具体的な指標の選択")
     st.markdown(f"「{perspective['title']}」について、さらに具体的な指標をご案内します。")
-    st.markdown("興味のある指標のボタンを押してください。")
+    st.markdown("興味のある指標の選択ボタンを押してください。")
     
     # 指標データが正しく生成されているかチェック
     if not st.session_state.current_options:
@@ -349,33 +346,30 @@ def handle_indicator_selection_stage():
         indicator_name = option.get('indicator_name') or option.get('name') or str(option)
         reason = option.get('reason', '理由が記載されていません')
         
-        # カード形式の美しいデザイン
-        st.markdown(f"""
-        <div class="selection-card" style="padding: 20px; margin: 16px 0; border-radius: 12px; border: 2px solid #e8f4fd; background: linear-gradient(135deg, #ffffff 0%, #f8fcff 100%); box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-            <div class="card-title" style="color: #1f77b4; font-weight: 600; font-size: 1.1em; margin-bottom: 8px;">
-                {i+1}. {indicator_name}
-            </div>
-            <div class="card-description" style="color: #666; font-size: 0.9em; line-height: 1.4;">
-                {reason}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # ボタンを中央に配置
-        col1, col2, col3 = st.columns([2, 1, 2])
-        with col2:
-            if st.button("この指標を選択", key=f"indicator_{i}", type="primary", use_container_width=True):
-                # 最終的な指標が選択された
-                indicator_data = get_indicator_details(indicator_name)
-                if indicator_data:
-                    st.session_state.stage = STAGE_FINAL
-                    st.session_state.selected_indicator = {
-                        'data': indicator_data,
-                        'reason': reason
-                    }
-                    add_message_to_history("user", f"{indicator_name}の詳細情報が知りたい")
-                    add_message_to_history("assistant", f"「{indicator_name}」の詳細情報を表示します。")
-                st.rerun()
+        # 枠線で囲まれたカード
+        with st.container(border=True):
+            # 上段：タイトルと選択ボタン
+            col_title, col_button = st.columns([4, 1])
+            
+            with col_title:
+                st.markdown(f"**{i+1}. {indicator_name}**")
+            
+            with col_button:
+                if st.button("選択", key=f"indicator_{i}", type="primary", use_container_width=True):
+                    # 最終的な指標が選択された
+                    indicator_data = get_indicator_details(indicator_name)
+                    if indicator_data:
+                        st.session_state.stage = STAGE_FINAL
+                        st.session_state.selected_indicator = {
+                            'data': indicator_data,
+                            'reason': reason
+                        }
+                        add_message_to_history("user", f"{indicator_name}の詳細情報が知りたい")
+                        add_message_to_history("assistant", f"「{indicator_name}」の詳細情報を表示します。")
+                    st.rerun()
+            
+            # 下段：説明文
+            st.markdown(reason)
 
 def regenerate_indicators_for_current_perspective():
     """現在の観点に基づいて指標を再生成"""
