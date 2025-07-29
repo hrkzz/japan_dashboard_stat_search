@@ -71,7 +71,7 @@ def get_available_indicators_for_query(query):
         return f"指標リスト取得エラー: {str(e)}"
 
 def generate_analysis_perspectives(query):
-    """分析観点を生成する（関連指標リストは不要）"""
+    """分析観点を生成する"""
     logger.info(f"🤖 分析観点生成開始: '{query}'")
     available_indicators = get_available_indicators_for_query(query)
     st.session_state.available_indicators = available_indicators
@@ -107,6 +107,12 @@ def generate_analysis_perspectives(query):
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
+            # 【追記】タイトルの末尾から「の分析」を削除する
+            if 'perspectives' in result and result['perspectives']:
+                for p in result['perspectives']:
+                    if 'title' in p and p['title'].endswith('の分析'):
+                        p['title'] = p['title'][:-3]  # "の分析" の3文字を削除
+
             logger.info(f"✅ 分析観点を生成: {len(result.get('perspectives', []))}個の観点")
             return result
         else:
@@ -402,13 +408,13 @@ def display_indicator_card(indicator_data, recommendation_reason, category_key, 
 
 def handle_initial_stage():
     """初期段階：ユーザーからの最初の質問を受け付け"""
-    st.markdown("## 📊 統計指標検索アシスタント")
+    st.markdown("### 統計指標検索アシスタント")
     st.markdown("どのような統計指標をお探しですか？分析したいテーマを下のチャット欄に入力してください。")
-    st.markdown("**例**: 子育て環境を比較したい、地域の教育水準を知りたい、高齢化の現状を把握したい")
+    st.markdown("例: 子育て環境を比較したい、地域の教育水準を知りたい、高齢化の現状を把握したい")
 
 def handle_perspective_selection_stage():
     """観点選択段階：分析観点を提示してユーザーに選択してもらう"""
-    st.markdown("### 🎯 分析観点の選択")
+    st.markdown("### 分析観点の選択")
     st.markdown(f"「{st.session_state.original_query}」について、どのような観点で分析しますか？")
     st.markdown("以下の選択肢から選択ボタンを押してください。")
     
@@ -427,7 +433,7 @@ def handle_perspective_selection_stage():
                     add_message_to_history("user", f"{i+1}番目の{option['title']}について詳しく知りたいです")
                     
                     # 選択された観点のタイトルで指標グループを生成
-                    with st.spinner("🤖 関連する指標グループを抽出中..."):
+                    with st.spinner(" 関連する指標を抽出中..."):
                         groups_result = generate_indicator_groups_for_perspective(option['title'])
                         
                         if groups_result and 'groups' in groups_result and groups_result['groups']:
@@ -453,7 +459,7 @@ def handle_group_selection_stage():
         st.error("指標グループデータが取得できませんでした。")
         if st.button("🔄 指標グループを再生成", key="regenerate_groups"):
             # 指標グループを再生成
-            with st.spinner("🤖 指標グループを再生成中..."):
+            with st.spinner(" 指標グループを再生成中..."):
                 groups_result = generate_indicator_groups_for_perspective(
                     perspective['title']
                 )
@@ -469,7 +475,7 @@ def handle_group_selection_stage():
             col_title, col_button = st.columns([4, 1])
             
             with col_title:
-                st.markdown(f"**{i+1}. {group['title']} ({group['group_code']})**")
+                st.markdown(f"**{i+1}. {group['title']}**")
             
             with col_button:
                 if st.button("選択", key=f"group_{i}", type="primary", use_container_width=True):
@@ -500,10 +506,6 @@ def handle_group_selection_stage():
             # 下段：説明文
             st.markdown(group['description'])
 
-
-
-
-
 def reset_session_state():
     """セッション状態をリセットして新しい検索を開始"""
     logger.info("🔄 セッション状態をリセット")
@@ -514,8 +516,6 @@ def reset_session_state():
     # 初期状態に戻す
     st.session_state.stage = STAGE_INITIAL
     st.session_state.current_options = []
-
-# check_if_new_query関数は不要になったため削除
 
 def handle_final_stage():
     """最終段階：選択された指標グループの全件を表示"""
@@ -576,7 +576,7 @@ def process_user_input(user_input):
     
     if st.session_state.stage == STAGE_INITIAL:
         # 初期段階：分析観点を生成
-        with st.spinner("🤖 分析観点を調査中..."):
+        with st.spinner(" 分析観点を調査中..."):
             perspectives_result = generate_analysis_perspectives(user_input)
             
             if perspectives_result and 'perspectives' in perspectives_result:
@@ -589,17 +589,14 @@ def process_user_input(user_input):
             else:
                 add_message_to_history("assistant", "申し訳ございません。分析観点の生成に失敗しました。もう一度お試しください。")
 
-# display_chat_history関数は削除（会話履歴は不要）
-
 def main():
     """アプリケーションのメインロジック"""
     st.set_page_config(
         page_title="統計指標検索アシスタント", 
-        page_icon="📊",
+        page_icon="",
         layout="wide"
     )
     
-    # CSSスタイルの追加
     st.markdown("""
         <style>
         .main > div { padding-top: 2rem; }
@@ -677,7 +674,6 @@ def main():
     available_models = llm_config.get_available_models()
     if available_models:
         with st.sidebar:
-            st.markdown("### 🚀 AI設定")
             model_options = list(available_models.keys())
             current_model_display = next((k for k, v in available_models.items() if v == llm_config.current_model), None)
             selected_model_display = st.selectbox(
@@ -704,8 +700,6 @@ def main():
         handle_group_selection_stage()
     elif st.session_state.stage == STAGE_FINAL:
         handle_final_stage()
-    
-    # 会話履歴は表示しない
 
 if __name__ == "__main__":
     main()
