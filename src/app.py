@@ -31,6 +31,8 @@ def initialize_session_state():
         st.session_state.selected_group_code = None
     if 'selected_group_indicators' not in st.session_state:
         st.session_state.selected_group_indicators = []
+    if 'analysis_plan' not in st.session_state:
+        st.session_state.analysis_plan = None
 
 def add_message_to_history(role, content):
     """チャット履歴にメッセージを追加"""
@@ -70,36 +72,54 @@ def get_available_indicators_for_query(query):
     except Exception as e:
         return f"指標リスト取得エラー: {str(e)}"
 
-def generate_analysis_perspectives(query):
-    """分析観点を生成する"""
-    logger.info(f"🤖 分析観点生成開始: '{query}'")
+@st.cache_data(ttl=3600, show_spinner=False)
+def generate_analysis_plan(query):
+    """
+    ユーザーのクエリに基づき、分析観点とそれに紐づく指標グループ案を含む
+    「分析計画」を一度のLLMコールで生成する。
+    """
+    logger.info(f"🤖 分析計画の生成開始: '{query}'")
     available_indicators = get_available_indicators_for_query(query)
     st.session_state.available_indicators = available_indicators
-    
-    system_prompt = f"""あなたは統計分析の専門家です。ユーザーの質問を分析し、4-5個の分析観点（中項目）を提示してください。
 
-**重要**: 以下の実在する統計指標に基づいて観点を設定してください。
-利用可能な統計指標：
+    system_prompt = f"""あなたは優秀なデータ分析の専門家です。ユーザーの質問を分析し、複数の「分析観点」と、各観点を探るための具体的な「指標グループ案」を提案してください。
+
+# 指示
+ユーザーの質問に対し、包括的な分析計画をJSON形式で出力してください。
+分析計画には、8〜10個の「分析観点（perspectives）」を含めてください。
+各「分析観点」には、その観点で具体的に何を見るべきかを示す「指標グループ案（suggested_groups）」を2〜3個含めてください。
+
+# 利用可能な統計指標の例
 {available_indicators}
 
-出力は必ずJSON形式で、以下の構造に従ってください：
+# 出力形式（必ずこのJSON構造に従うこと）
 {{
-  "perspectives": [
-    {{
-      "title": "分析観点のタイトル",
-      "description": "この観点で分析する理由の説明"
-    }}
-  ]
+  "analysis_plan": {{
+    "perspectives": [
+      {{
+        "perspective_title": "（例）教育環境の充実度",
+        "perspective_description": "地域の教育水準や子育て世代への教育支援がどの程度手厚いかを評価するための観点です。",
+        "suggested_groups": [
+          {{
+            "group_title": "（例）学校教育と施設",
+            "group_description": "公立学校の数、教員一人当たりの生徒数、図書館や体育館といった施設の状況から、基礎的な教育環境の質を把握します。"
+          }},
+          {{
+            "group_title": "（例）保育・待機児童問題",
+            "group_description": "保育所の数や待機児童の状況です。これが改善されれば、共働き世帯が安心して子育てできる環境が整っていると言えます。"
+          }}
+        ]
+      }}
+    ]
+  }}
 }}
 
-**必須要件**：
-- 4-5個の分析観点を提示してください
-- 各観点は上記の実在する統計指標に基づいている必要があります
-- 丁寧な『ですます調』にしてください
-- JSON形式以外は出力しないでください"""
+# 制約
+- JSON形式以外は絶対に出力しないでください。
+- 説明文は丁寧な「ですます調」で、ユーザーが理解しやすいように記述してください。
+"""
+    user_prompt = f"以下の質問について、詳細な分析計画をJSON形式で提案してください：\n\n{query}"
 
-    user_prompt = f"以下の質問について、統計分析の観点から4-5個の分析観点を提示してください：\n\n{query}"
-    
     try:
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         response = llm_config.generate_response(messages, temperature=0.2)
@@ -107,77 +127,61 @@ def generate_analysis_perspectives(query):
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
-            # 【追記】タイトルの末尾から「の分析」を削除する
-            if 'perspectives' in result and result['perspectives']:
-                for p in result['perspectives']:
-                    if 'title' in p and p['title'].endswith('の分析'):
-                        p['title'] = p['title'][:-3]  # "の分析" の3文字を削除
-
-            logger.info(f"✅ 分析観点を生成: {len(result.get('perspectives', []))}個の観点")
+            # 分析観点を最大10個に制限
+            if 'analysis_plan' in result and 'perspectives' in result['analysis_plan']:
+                result['analysis_plan']['perspectives'] = result['analysis_plan']['perspectives'][:10]
+            logger.info("✅ 分析計画の生成に成功しました。")
             return result
         else:
-            logger.error(f"❌ 有効なJSONが生成されませんでした: {response[:500]}...")
+            logger.error(f"❌ 分析計画のJSON生成に失敗: {response[:500]}...")
             return None
     except Exception as e:
-        logger.error(f"❌ 分析観点生成エラー: {str(e)}")
-        st.error(f"分析観点生成でエラーが発生しました: {str(e)}")
+        logger.error(f"❌ 分析計画の生成エラー: {str(e)}")
+        st.error(f"分析計画の生成でエラーが発生しました: {str(e)}")
         return None
 
-def generate_dynamic_group_descriptions(user_query, group_list):
-    """ユーザーのクエリに基づいて指標グループの動的説明文を生成する"""
-    logger.info(f"🤖 動的説明文生成開始: '{user_query}' for {len(group_list)} groups")
+
+
+def generate_group_summary(group_indicators, user_query):
+    """選択されたグループの要約文をAIで生成する"""
+    logger.info(f"🤖 グループ要約生成開始: '{user_query}' for {len(group_indicators)} indicators")
     
-    # グループ名リストを作成
-    group_names = [group['title'] for group in group_list]
+    # 指標名リストを作成
+    indicator_names = [indicator.get('koumoku_name_full', '') for indicator in group_indicators]
     
-    system_prompt = f"""あなたは統計分析の専門家です。ユーザーのクエリに対して、各指標グループがどのような洞察を与えるかを説明してください。
+    # 分野情報を取得
+    representative = group_indicators[0] if group_indicators else {}
+    bunya_info = f"{representative.get('bunya_name', '')} > {representative.get('chuubunrui_name', '')} > {representative.get('shoubunrui_name', '')}"
+    
+    system_prompt = f"""あなたは統計分析の専門家です。ユーザーのクエリに対して、選択された指標グループがどのような分析の切り口を提供するかを説明してください。
 
 **ユーザーのクエリ**: {user_query}
 
-**指標グループリスト**: {', '.join(group_names)}
+**指標グループに含まれる指標**: {', '.join(indicator_names[:10])}{'...' if len(indicator_names) > 10 else ''}
 
-各指標グループについて、以下の観点から**より長く、丁寧な『ですます調』**で説明文を生成してください：
-- このグループの指標を見ることで、ユーザーのクエリに対してどのような洞察が得られるか
-- ユーザーがその指標グループを選ぶことで、どのようなことが分析できるのかを具体的に説明
-- なぜこのグループがユーザーの関心事に関連するのか
-- 1つの説明文は80-120文字程度で丁寧に
+**分野**: {bunya_info}
 
-出力は必ずJSON形式で、以下の構造に従ってください：
-[
-  {{
-    "group_name": "指標グループ名",
-    "description": "ユーザーのクエリに対する洞察の詳細説明"
-  }}
-]
+**指標数**: {len(group_indicators)}件
 
-**必須要件**：
-- group_nameは上記リストの指標グループ名と完全に一致させてください
-- descriptionは80-120文字程度で、丁寧な「ですます調」で記述してください
-- ユーザーにとって親切で分かりやすい説明にしてください
-- JSON形式以外は出力しないでください"""
+このグループの指標について、以下の観点から簡潔で分かりやすい要約文を生成してください：
+- ユーザーの関心事に対し、このグループがどのような分析の切り口を提供するか
+- このグループの指標を見ることで何がわかるのか
+- なぜこのグループがユーザーの関心事に重要なのか
+- 要約文は150-250文字程度で、丁寧な「ですます調」で記述
 
-    user_prompt = f"上記の指標グループについて、ユーザーのクエリ「{user_query}」に対する洞察を説明してください。"
+出力は要約文のみを出力してください。JSON形式や他の形式は不要です。"""
+
+    user_prompt = f"上記の指標グループについて、ユーザーのクエリ「{user_query}」に対する要約説明文を生成してください。"
     
     try:
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         response = llm_config.generate_response(messages, temperature=0.3)
         
-        logger.info(f"🔍 LLM応答の最初の500文字: {response[:500]}")
-        
-        json_match = re.search(r'\[.*\]', response, re.DOTALL)
-        if json_match:
-            parsed_json = json.loads(json_match.group())
-            logger.info(f"✅ 動的説明文生成成功: {len(parsed_json)}件")
-            return parsed_json
-        else:
-            logger.error(f"❌ 有効なJSONが生成されませんでした: {response[:500]}")
-            return None
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ JSON解析エラー: {str(e)}")
-        return None
+        logger.info(f"✅ グループ要約生成成功")
+        return response.strip()
     except Exception as e:
-        logger.error(f"❌ 動的説明文生成エラー: {str(e)}")
-        return None
+        logger.error(f"❌ グループ要約生成エラー: {str(e)}")
+        return "このグループの指標は、ユーザーの関心事に関連する重要な統計データを含んでいます。"
 
 def generate_indicator_explanations(user_query, indicators_list):
     """各指標について、ユーザーのクエリとの関連性を説明する動的な文章を生成する"""
@@ -299,20 +303,6 @@ def generate_indicator_groups_for_perspective(perspective_title):
         # 上位15グループに制限
         group_indicators = group_indicators[:15]
         
-        # 動的説明文を生成
-        if group_indicators and st.session_state.original_query:
-            dynamic_descriptions = generate_dynamic_group_descriptions(
-                st.session_state.original_query, 
-                group_indicators
-            )
-            
-            if dynamic_descriptions:
-                desc_map = {desc['group_name']: desc['description'] for desc in dynamic_descriptions}
-                for group in group_indicators:
-                    if group['title'] in desc_map:
-                        group['description'] = desc_map[group['title']]
-                        logger.info(f"✅ 動的説明文適用: {group['title']}")
-        
         logger.info(f"✅ {len(group_indicators)}個の指標グループを生成")
         return {"groups": group_indicators}
         
@@ -375,17 +365,17 @@ def display_indicator_card(indicator_data, recommendation_reason, category_key, 
                 unsafe_allow_html=True
             )
             
-            # 動的説明文があれば表示、なければ従来の説明文を使用
-            if dynamic_explanation:
-                st.markdown(
-                    f'<div class="indicator-reason">💡 {dynamic_explanation}</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    f'<div class="indicator-reason">💡 {recommendation_reason}</div>',
-                    unsafe_allow_html=True
-                )
+            # 冗長な説明文を削除してカードをシンプル化
+            # if dynamic_explanation:
+            #     st.markdown(
+            #         f'<div class="indicator-reason">💡 {dynamic_explanation}</div>',
+            #         unsafe_allow_html=True
+            #     )
+            # else:
+            #     st.markdown(
+            #         f'<div class="indicator-reason">💡 {recommendation_reason}</div>',
+            #         unsafe_allow_html=True
+            #     )
             
             path = f'{indicator_data["bunya_name"]} > {indicator_data["chuubunrui_name"]} > {indicator_data["shoubunrui_name"]}'
             st.markdown(
@@ -418,54 +408,39 @@ def handle_perspective_selection_stage():
     st.markdown(f"「{st.session_state.original_query}」について、どのような観点で分析しますか？")
     st.markdown("以下の選択肢から選択ボタンを押してください。")
     
-    for i, option in enumerate(st.session_state.current_options):
+    perspectives = st.session_state.analysis_plan.get('perspectives', [])
+    for i, perspective in enumerate(perspectives):
         # 枠線で囲まれたカード
         with st.container(border=True):
             # 上段：タイトルと選択ボタン
             col_title, col_button = st.columns([4, 1])
             
             with col_title:
-                st.markdown(f"**{i+1}. {option['title']}**")
+                st.markdown(f"**{i+1}. {perspective['perspective_title']}**")
             
             with col_button:
                 if st.button("選択", key=f"perspective_{i}", type="primary", use_container_width=True):
-                    st.session_state.selected_perspective = option
-                    add_message_to_history("user", f"{i+1}番目の{option['title']}について詳しく知りたいです")
+                    st.session_state.selected_perspective = perspective
+                    add_message_to_history("user", f"{i+1}番目の{perspective['perspective_title']}について詳しく知りたいです")
                     
-                    # 選択された観点のタイトルで指標グループを生成
-                    with st.spinner(" 関連する指標を抽出中..."):
-                        groups_result = generate_indicator_groups_for_perspective(option['title'])
-                        
-                        if groups_result and 'groups' in groups_result and groups_result['groups']:
-                            st.session_state.current_options = groups_result['groups']
-                            st.session_state.stage = STAGE_GROUP_SELECTION
-                            add_message_to_history("assistant", 
-                                f"「{option['title']}」ですね。この観点に関連する指標グループを以下から選択してください。")
-                        else:
-                            logger.error(f"❌ 指標グループ生成結果が無効: {groups_result}")
-                            st.error("関連する指標グループが見つかりませんでした。もう一度お試しください。")
+                    # analysis_planからsuggested_groupsを取得
+                    st.session_state.current_options = perspective.get('suggested_groups', [])
+                    st.session_state.stage = STAGE_GROUP_SELECTION
+                    add_message_to_history("assistant", 
+                        f"「{perspective['perspective_title']}」ですね。この観点に関連する指標グループを以下から選択してください。")
                     st.rerun()
             
             # 下段：説明文
-            st.markdown(option['description'])
+            st.markdown(perspective['perspective_description'])
 
 def handle_group_selection_stage():
     """グループ選択段階：上位指標グループを提示してユーザーに選択してもらう"""
     perspective = st.session_state.selected_perspective
     st.markdown("### 📊 指標グループの選択")
-    st.markdown(f"「{perspective['title']}」について、より具体的な指標グループを以下から選択してください。")
+    st.markdown(f"「{perspective['perspective_title']}」について、より具体的な指標グループを以下から選択してください。")
     
     if not st.session_state.current_options:
         st.error("指標グループデータが取得できませんでした。")
-        if st.button("🔄 指標グループを再生成", key="regenerate_groups"):
-            # 指標グループを再生成
-            with st.spinner(" 指標グループを再生成中..."):
-                groups_result = generate_indicator_groups_for_perspective(
-                    perspective['title']
-                )
-                if groups_result and 'groups' in groups_result:
-                    st.session_state.current_options = groups_result['groups']
-                    st.rerun()
         return
     
     for i, group in enumerate(st.session_state.current_options):
@@ -475,41 +450,57 @@ def handle_group_selection_stage():
             col_title, col_button = st.columns([4, 1])
             
             with col_title:
-                st.markdown(f"**{i+1}. {group['title']}**")
+                st.markdown(f"**{i+1}. {group['group_title']}**")
             
             with col_button:
                 if st.button("選択", key=f"group_{i}", type="primary", use_container_width=True):
-                    # 選択されたグループの全指標を取得
-                    selected_group_code = group['group_code']
-                    st.session_state.selected_group_code = selected_group_code
-                    
-                    # DataFrameから該当グループの全指標を取得
-                    if retriever.df is not None:
-                        group_indicators = retriever.df[
-                            retriever.df['group_code'].astype(str) == str(selected_group_code)
-                        ].copy()
-                        
-                        if not group_indicators.empty:
-                            # セッション状態に保存
-                            st.session_state.selected_group_indicators = group_indicators.to_dict('records')
-                            st.session_state.stage = STAGE_FINAL
-                            
-                            add_message_to_history("user", f"{group['title']}グループの詳細が知りたい")
-                            add_message_to_history("assistant", 
-                                f"「{group['title']}」グループの指標を表示します。以下が関連する全ての指標です。")
+                    # ユーザーが選択したグループ案のタイトルを取得
+                    selected_group_title = group['group_title']
+                    add_message_to_history("user", f"「{selected_group_title}」グループの詳細が知りたい")
+
+                    with st.spinner(f"「{selected_group_title}」グループの指標を検索・集計中..."):
+                        # Part 1で修正したhybrid_searchを使い、代表的な指標グループを検索
+                        search_results = retriever.hybrid_search(selected_group_title, top_k=5)
+
+                        if not search_results:
+                            st.error("関連する指標グループが見つかりませんでした。")
+                            st.stop()
+
+                        # 最も関連性の高い代表指標のkoumoku_codeを特定
+                        selected_koumoku_code = search_results[0]['koumoku_code']
+                        logger.info(f"特定された代表指標コード: {selected_koumoku_code}")
+
+                        # retrieverが持つ完全なデータフレームから、
+                        # 代表指標のコードで前方一致する指標のみを抽出する
+                        if retriever.df is not None:
+                            # .astype(str) でデータ型を揃えてから前方一致検索
+                            group_indicators_df = retriever.df[
+                                retriever.df['koumoku_code'].astype(str).str.startswith(str(selected_koumoku_code))
+                            ].copy()
+
+                            if not group_indicators_df.empty:
+                                # セッション状態に「選択された1グループの指標のみ」を保存
+                                st.session_state.selected_group_indicators = group_indicators_df.to_dict('records')
+                                st.session_state.selected_group_code = selected_koumoku_code  # 完全なコードを保存
+                                st.session_state.stage = STAGE_FINAL
+                                
+                                representative_name = group_indicators_df.iloc[0]['koumoku_name_full']
+                                add_message_to_history("assistant", 
+                                    f"承知いたしました。「{representative_name}」に関連する指標を表示します。")
+                            else:
+                                st.error(f"指標グループ({selected_koumoku_code})に属する指標が見つかりませんでした。")
                         else:
-                            st.error("該当するグループの指標が見つかりませんでした。")
-                    else:
-                        st.error("データベースが読み込まれていません。")
+                            st.error("データベースが読み込まれていません。")
+                    
                     st.rerun()
             
             # 下段：説明文
-            st.markdown(group['description'])
+            st.markdown(group['group_description'])
 
 def reset_session_state():
     """セッション状態をリセットして新しい検索を開始"""
     logger.info("🔄 セッション状態をリセット")
-    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators']:
+    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan']:
         if key in st.session_state:
             del st.session_state[key]
     
@@ -523,43 +514,58 @@ def handle_final_stage():
     
     if st.session_state.selected_group_indicators:
         # グループ情報の表示
-        if st.session_state.selected_group_code:
-            # 代表指標の情報を取得
-            representative = None
-            for indicator in st.session_state.selected_group_indicators:
-                if indicator.get('koumoku_code') == st.session_state.selected_group_code:
-                    representative = indicator
-                    break
-            
-            if representative:
-                st.markdown(f"**グループ**: {representative['koumoku_name_full']} ({st.session_state.selected_group_code})")
-                st.markdown(f"**分野**: {representative['bunya_name']} > {representative['chuubunrui_name']} > {representative['shoubunrui_name']}")
+        representative = st.session_state.selected_group_indicators[0] if st.session_state.selected_group_indicators else None
+        
+        if representative:
+            st.markdown(f"**グループ**: {representative['koumoku_name_full']}関連指標")
+            st.markdown(f"**分野**: {representative['bunya_name']} > {representative['chuubunrui_name']} > {representative['shoubunrui_name']}")
         
         st.markdown(f"**該当指標数**: {len(st.session_state.selected_group_indicators)}件")
-        st.markdown("---")
         
-        # 動的説明文を生成
-        indicator_explanations = {}
+        # グループ要約を生成・表示
         if st.session_state.original_query:
-            with st.spinner("🤖 各指標の詳細説明を生成中..."):
-                indicator_explanations = generate_indicator_explanations(
-                    st.session_state.original_query,
-                    st.session_state.selected_group_indicators
+            with st.spinner("グループ要約を生成中..."):
+                group_summary = generate_group_summary(
+                    st.session_state.selected_group_indicators,
+                    st.session_state.original_query
                 )
-        
-        # グループ内の全指標を表示
-        for i, indicator_data in enumerate(st.session_state.selected_group_indicators):
-            # 動的説明文を取得
-            indicator_name = indicator_data.get('koumoku_name_full', '')
-            dynamic_explanation = indicator_explanations.get(indicator_name, None)
             
-            display_indicator_card(
-                indicator_data, 
-                f"「{st.session_state.selected_group_code}」グループに属する指標", 
-                "group", 
-                i,
-                dynamic_explanation=dynamic_explanation
-            )
+            # 区切り線の追加とクリーンな概要表示
+            st.divider()
+            st.markdown(group_summary)
+            st.divider()
+        
+        # 指標件数に応じた表示処理の分岐
+        total_indicators = len(st.session_state.selected_group_indicators)
+        
+        if total_indicators > 1:
+            # 複数指標の場合：親子指標の分離（代表指標自身を一覧から除外）
+            child_indicators = []
+            representative_code = st.session_state.get('selected_group_code', '')
+            
+            for indicator_data in st.session_state.selected_group_indicators:
+                # 代表指標自身（完全一致）を除外
+                if str(indicator_data.get('koumoku_code', '')) != str(representative_code):
+                    child_indicators.append(indicator_data)
+            
+            # 子指標のみを表示
+            st.markdown(f"### 📊 関連指標一覧（{len(child_indicators)}件）")
+            for i, indicator_data in enumerate(child_indicators):
+                display_indicator_card(
+                    indicator_data, 
+                    "前方一致による関連指標", 
+                    "group", 
+                    i
+                )
+        else:
+            # 単独指標の場合：タイトルなしでその1件をそのまま表示
+            for i, indicator_data in enumerate(st.session_state.selected_group_indicators):
+                display_indicator_card(
+                    indicator_data, 
+                    "代表指標", 
+                    "group", 
+                    i
+                )
     else:
         st.error("指標グループデータが見つかりません。")
     
@@ -575,19 +581,17 @@ def process_user_input(user_input):
     add_message_to_history("user", user_input)
     
     if st.session_state.stage == STAGE_INITIAL:
-        # 初期段階：分析観点を生成
-        with st.spinner(" 分析観点を調査中..."):
-            perspectives_result = generate_analysis_perspectives(user_input)
+        # 初期段階：分析計画を生成
+        with st.spinner("分析計画を調査中..."):
+            plan_result = generate_analysis_plan(user_input)
             
-            if perspectives_result and 'perspectives' in perspectives_result:
-                st.session_state.current_options = perspectives_result['perspectives']
+            if plan_result and 'analysis_plan' in plan_result:
+                st.session_state.analysis_plan = plan_result['analysis_plan']
                 st.session_state.original_query = user_input
                 st.session_state.stage = STAGE_PERSPECTIVE_SELECTION
-                
-                add_message_to_history("assistant", 
-                    f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？")
+                add_message_to_history("assistant", f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？")
             else:
-                add_message_to_history("assistant", "申し訳ございません。分析観点の生成に失敗しました。もう一度お試しください。")
+                add_message_to_history("assistant", "申し訳ございません。分析計画の生成に失敗しました。もう一度お試しください。")
 
 def main():
     """アプリケーションのメインロジック"""

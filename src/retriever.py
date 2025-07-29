@@ -14,7 +14,7 @@ from typing import List, Dict, Tuple
 from encoder import EmbeddingConfig
 from loguru import logger
 
-@st.cache_data(ttl=3600) # 1時間キャッシュする
+@st.cache_data(ttl=3600, show_spinner=False) # 1時間キャッシュする
 def load_db_from_github(zip_url: str):
     """
     GitHub Releasesからzipをダウンロードし、中のファイルをメモリにロードする。
@@ -269,31 +269,35 @@ class HybridRetriever:
             
             logger.info(f"✅ リランキング後の結果数: {len(reranked_indices)} (最大{final_top_k})")
             
-            # 結果を整形
+            # --- ここからグルーピング処理 ---
             results = []
+            processed_groups = set() # 処理済みのgroup_codeを記録
             bunya_counts = {}
             
             for idx in reranked_indices:
                 item = self.df.iloc[idx]
-                bunya = item['bunya_name']
-                bunya_counts[bunya] = bunya_counts.get(bunya, 0) + 1
-                
-                results.append({
-                    'koumoku_name': item.get('koumoku_name', item['koumoku_name_full']),
-                    'koumoku_name_full': item['koumoku_name_full'],
-                    'bunya_name': item['bunya_name'],
-                    'chuubunrui_name': item['chuubunrui_name'],
-                    'shoubunrui_name': item['shoubunrui_name'],
-                    'score': all_candidates.get(idx, 0)
-                })
+                group_code = item.get('group_code')
+
+                if group_code not in processed_groups:
+                    bunya = item['bunya_name']
+                    bunya_counts[bunya] = bunya_counts.get(bunya, 0) + 1
+                    
+                    results.append({
+                        'koumoku_name_full': item['koumoku_name_full'],
+                        'bunya_name': item['bunya_name'],
+                        'chuubunrui_name': item['chuubunrui_name'],
+                        'shoubunrui_name': item['shoubunrui_name'],
+                        'koumoku_code': item.get('koumoku_code', ''),
+                        'group_code': group_code,
+                        'score': all_candidates.get(idx, 0)
+                    })
+                    
+                    processed_groups.add(group_code)
+
+            logger.info(f"⚙️ グルーピング後の最終結果数: {len(results)}件")
+            # --- グルーピング処理ここまで ---
             
             logger.info(f"📈 最終結果の分野分布: {dict(bunya_counts)}")
-            
-            # 詳細結果をログ出力
-            logger.info(f"📋 検索結果詳細:")
-            for i, result in enumerate(results, 1):
-                logger.info(f"  {i:2d}. {result['koumoku_name_full']} ({result['bunya_name']})")
-            
             logger.info(f"🎯 検索完了: {len(results)}件の指標を返却")
             
             return results
