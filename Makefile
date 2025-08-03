@@ -53,7 +53,7 @@ fix:
 # Streamlitアプリケーション実行
 run:
 	@echo "Streamlitアプリケーションを起動しています..."
-	cd src && streamlit run app.py
+	streamlit run src/app.py
 
 # クリーンアップ
 clean:
