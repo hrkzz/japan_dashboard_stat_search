@@ -4,12 +4,21 @@ BigQuery ロギングモジュール
 """
 
 import streamlit as st
-from google.cloud import bigquery
-from google.oauth2 import service_account
 import json
 from datetime import datetime, timezone
 from loguru import logger
 from typing import Dict, Optional
+
+# BigQueryライブラリの防御的インポート
+try:
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+    BIGQUERY_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ BigQueryライブラリが利用できません。ログ記録機能は無効になります。")
+    BIGQUERY_AVAILABLE = False
+    bigquery = None
+    service_account = None
 
 
 class BigQueryLogger:
@@ -24,12 +33,39 @@ class BigQueryLogger:
     
     def _initialize_client(self):
         """BigQueryクライアントを初期化"""
+        # BigQueryライブラリが利用できない場合は早期リターン
+        if not BIGQUERY_AVAILABLE:
+            logger.info("ℹ️ BigQueryライブラリが利用できないため、ログ記録機能を無効にします")
+            return
+            
         try:
             # Streamlit secretsから設定を読み込み
-            if "gcp_service_account" in st.secrets:
-                # サービスアカウント情報を取得
+            if hasattr(st, 'secrets') and "gcp_service_account" in st.secrets and "bigquery_project_id" in st.secrets:
+                # TOML形式のサービスアカウント情報から辞書を構築
+                gcp_section = st.secrets["gcp_service_account"]
+                service_account_info = {
+                    "type": gcp_section.get("type"),
+                    "project_id": gcp_section.get("project_id"),
+                    "private_key_id": gcp_section.get("private_key_id"),
+                    "private_key": gcp_section.get("private_key"),
+                    "client_email": gcp_section.get("client_email"),
+                    "client_id": gcp_section.get("client_id"),
+                    "auth_uri": gcp_section.get("auth_uri"),
+                    "token_uri": gcp_section.get("token_uri"),
+                    "auth_provider_x509_cert_url": gcp_section.get("auth_provider_x509_cert_url"),
+                    "client_x509_cert_url": gcp_section.get("client_x509_cert_url"),
+                    "universe_domain": gcp_section.get("universe_domain")
+                }
+                
+                # 必須フィールドの確認
+                if not all([service_account_info["type"], service_account_info["project_id"], 
+                           service_account_info["private_key"], service_account_info["client_email"]]):
+                    logger.warning("⚠️ BigQuery設定に必須フィールドが不足しています")
+                    return
+                
+                # サービスアカウント情報から認証情報を取得
                 credentials = service_account.Credentials.from_service_account_info(
-                    st.secrets["gcp_service_account"]
+                    service_account_info
                 )
                 
                 # BigQuery設定を取得
@@ -45,10 +81,10 @@ class BigQueryLogger:
                 
                 logger.info("✅ BigQueryクライアントが正常に初期化されました")
             else:
-                logger.warning("⚠️ BigQuery設定が見つかりません（secrets.tomlを確認してください）")
+                logger.info("ℹ️ BigQuery設定が見つかりません。ログ記録は無効になります（開発環境では正常です）")
                 
         except Exception as e:
-            logger.error(f"❌ BigQueryクライアント初期化エラー: {str(e)}")
+            logger.warning(f"⚠️ BigQueryクライアント初期化エラー（アプリは正常に動作します）: {str(e)}")
             self.client = None
     
     def log_event(self, 
