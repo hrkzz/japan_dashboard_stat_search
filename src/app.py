@@ -2,10 +2,12 @@ import streamlit as st
 import json
 import re
 import pandas as pd
+import uuid
 from retriever import retriever
 from llm_config import llm_config
 from loguru import logger
 import time
+from src.bq_logger import log_event
 
 # 対話の段階を定義
 STAGE_INITIAL = "initial"
@@ -15,6 +17,11 @@ STAGE_FINAL = "final"
 
 def initialize_session_state():
     """セッション状態を初期化"""
+    # セッションIDの生成（初回のみ）
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+        logger.info(f"🆔 新しいセッションID生成: {st.session_state.session_id[:8]}...")
+    
     if 'stage' not in st.session_state:
         st.session_state.stage = STAGE_INITIAL
     if 'chat_history' not in st.session_state:
@@ -485,6 +492,24 @@ def handle_group_selection_stage():
                                 st.session_state.stage = STAGE_FINAL
                                 
                                 representative_name = group_indicators_df.iloc[0]['koumoku_name_full']
+                                
+                                # 選択項目のロギング
+                                try:
+                                    current_model = getattr(llm_config, 'current_model', 'unknown')
+                                    selected_perspective_title = st.session_state.selected_perspective.get('perspective_title', '') if st.session_state.selected_perspective else ''
+                                    
+                                    log_event(
+                                        session_id=st.session_state.session_id,
+                                        event_type='selection',
+                                        user_query=st.session_state.original_query,
+                                        selected_perspective=selected_perspective_title,
+                                        selected_group=selected_group_title,
+                                        final_indicators=st.session_state.selected_group_indicators,
+                                        llm_model=current_model
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"⚠️ 選択ログ記録エラー: {str(e)}")
+                                
                                 add_message_to_history("assistant", 
                                     f"承知いたしました。「{representative_name}」に関連する指標を表示します。")
                             else:
@@ -500,13 +525,16 @@ def handle_group_selection_stage():
 def reset_session_state():
     """セッション状態をリセットして新しい検索を開始"""
     logger.info("🔄 セッション状態をリセット")
-    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan']:
+    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan', 'session_id']:
         if key in st.session_state:
             del st.session_state[key]
     
     # 初期状態に戻す
     st.session_state.stage = STAGE_INITIAL
     st.session_state.current_options = []
+    # 新しいセッションIDを生成
+    st.session_state.session_id = str(uuid.uuid4())
+    logger.info(f"🆔 新しいセッションID生成: {st.session_state.session_id[:8]}...")
 
 def handle_final_stage():
     """最終段階：選択された指標グループの全件を表示"""
@@ -581,6 +609,18 @@ def process_user_input(user_input):
     add_message_to_history("user", user_input)
     
     if st.session_state.stage == STAGE_INITIAL:
+        # クエリのロギング
+        try:
+            current_model = getattr(llm_config, 'current_model', 'unknown')
+            log_event(
+                session_id=st.session_state.session_id,
+                event_type='query',
+                user_query=user_input,
+                llm_model=current_model
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ クエリログ記録エラー: {str(e)}")
+        
         # 初期段階：分析計画を生成
         with st.spinner("分析計画を調査中..."):
             plan_result = generate_analysis_plan(user_input)
