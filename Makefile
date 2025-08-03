@@ -33,8 +33,7 @@ install:
 # ベクトルデータベース構築
 build-db:
 	@echo "ベクトルデータベースを構築しています..."
-	cd src && python build_vector_db.py
-	@echo "ベクトルデータベースの構築が完了しました。"
+	python src/build_vector_db.py
 
 # Ruffによるlinting
 lint:
@@ -76,4 +75,4 @@ activate-help:
 # 仮想環境ディアクティベート方法の表示
 deactivate-help:
 	@echo "仮想環境をディアクティベートするには、以下のコマンドを実行してください:"
-	@echo "  deactivate" 
+	@echo "  deactivate"

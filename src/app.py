@@ -646,12 +646,6 @@ def process_user_input(user_input):
 def main():
     """アプリケーションのメインロジック"""
 
-    # --- ▼▼▼ 再度、このデバッグコードを追加 ▼▼▼ ---
-    st.write("--- デバッグ情報：st.secretsの内容 ---")
-    st.write(st.secrets.to_dict())
-    st.write("------------------------------------")
-    # --- ▲▲▲ ここまでを追加 ▲▲▲ ---
-    
     st.set_page_config(
         page_title="統計指標検索アシスタント", 
         page_icon="",
