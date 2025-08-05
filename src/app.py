@@ -409,6 +409,9 @@ def display_indicator_card(indicator_data, category_key, indicator_index):
                                 event_type='add_indicator',
                                 user_query=st.session_state.original_query,
                                 selected_indicator=indicator_data,
+                                selected_perspective=st.session_state.selected_perspective.get('perspective_title', '') if st.session_state.selected_perspective else '',
+                                selected_group=st.session_state.get('selected_group_title', ''),
+                                final_indicators=st.session_state.selected_group_indicators,
                                 llm_model=getattr(llm_config, 'current_model', 'unknown')
                             )
                         except Exception as e:
@@ -486,6 +489,7 @@ def handle_group_selection_stage():
                 if st.button("選択", key=f"group_{i}", type="primary", use_container_width=True):
                     # ユーザーが選択したグループ案のタイトルを取得
                     selected_group_title = group['group_title']
+                    st.session_state.selected_group_title = selected_group_title  # セッション状態に保存
                     add_message_to_history("user", f"「{selected_group_title}」グループの詳細が知りたい")
 
                     with st.spinner(f"「{selected_group_title}」グループの指標を検索・集計中..."):
@@ -550,7 +554,7 @@ def handle_group_selection_stage():
 def reset_session_state():
     """セッション状態をリセットして新しい検索を開始"""
     logger.info("🔄 セッション状態をリセット")
-    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan', 'session_id', 'summary_generated', 'generated_summary_text']:
+    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan', 'session_id', 'summary_generated', 'generated_summary_text', 'selected_group_title']:
         if key in st.session_state:
             del st.session_state[key]
     

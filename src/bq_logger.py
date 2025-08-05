@@ -6,6 +6,7 @@ import streamlit as st
 import json
 from datetime import datetime, timezone
 from loguru import logger
+import pytz
 
 try:
     from google.cloud import bigquery
@@ -45,7 +46,8 @@ class BigQueryLogger:
         if not self.client: return
 
         try:
-            row_to_insert = {"log_timestamp": datetime.now(timezone.utc).isoformat()}
+            jst = pytz.timezone('Asia/Tokyo')
+            row_to_insert = {"log_timestamp": datetime.now(jst).isoformat()}
             
             for key, value in kwargs.items():
                 # あらゆる値を文字列に変換する

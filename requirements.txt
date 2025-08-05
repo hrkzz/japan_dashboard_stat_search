@@ -11,3 +11,4 @@ requests
 pyperclip
 google-cloud-bigquery
 pyarrow
+pytz
