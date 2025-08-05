@@ -18,6 +18,17 @@ except ImportError as e:
         """ダミーのlog_event関数"""
         return False
 
+try:
+    from streamlit_extras.st_javascript import st_javascript
+    JAVASCRIPT_ENABLED = True
+except ImportError as e:
+    logger.warning(f"⚠️ streamlit-extrasのインポートに失敗: {str(e)}")
+    JAVASCRIPT_ENABLED = False
+    def st_javascript(js_code):
+        """ダミーのst_javascript関数"""
+        logger.warning("JavaScriptが使用できません。")
+        return None
+
 # 対話の段階を定義
 STAGE_INITIAL = "initial"
 STAGE_PERSPECTIVE_SELECTION = "perspective_selection"
@@ -421,13 +432,40 @@ def display_indicator_card(indicator_data, category_key, indicator_index):
                 else:
                     st.toast("この指標は既に追加されています。")
 
-        # 「Power BIで開く」リンクボタン
+        # 「Power BIで開く」ボタン
         with action_col2:
             base_url = "https://app.powerbi.com/groups/f57d1ec6-4658-47f7-9a93-08811e43127f/reports/1accacdd-98d0-4d03-9b25-48f4c9673ff4/02fa5822008e814cf7f2?experience=power-bi"
             indicator_code = indicator_data.get("koumoku_code", "")
             cleaned_indicator_code = indicator_code.lstrip('#')
             power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{cleaned_indicator_code}'"
-            st.link_button("↗ Power BI で開く", power_bi_url, use_container_width=True)
+
+            # 通常のボタンとして作成
+            if st.button("↗ Power BI で開く", key=f"powerbi_{unique_key}", type="secondary", use_container_width=True):
+                # 1. ログを記録する
+                if LOGGING_ENABLED:
+                    try:
+                        log_event(
+                            session_id=st.session_state.session_id,
+                            event_type='open_powerbi',  # 新しいイベントタイプ
+                            user_query=st.session_state.original_query,
+                            selected_indicator=indicator_data,
+                            selected_perspective=st.session_state.selected_perspective.get('perspective_title', '') if st.session_state.selected_perspective else '',
+                            selected_group=st.session_state.get('selected_group_title', ''),
+                            final_indicators=st.session_state.selected_group_indicators,
+                            llm_model=getattr(llm_config, 'current_model', 'unknown')
+                        )
+                    except Exception as e:
+                        logger.warning(f"⚠️ Power BIクリックログ記録エラー: {str(e)}")
+
+                # 2. JavaScriptを使って新しいタブでURLを開く
+                if JAVASCRIPT_ENABLED:
+                    st_javascript(f"window.open('{power_bi_url}', '_blank')")
+                else:
+                    st.info(f"Power BIのURLをクリップボードにコピーしました。ブラウザで開いてください: {power_bi_url}")
+                    try:
+                        pyperclip.copy(power_bi_url)
+                    except Exception:
+                        pass
 
 def handle_initial_stage():
     """初期段階：ユーザーからの最初の質問を受け付け"""
