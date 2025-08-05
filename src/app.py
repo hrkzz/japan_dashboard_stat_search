@@ -3,6 +3,7 @@ import json
 import re
 import pandas as pd
 import uuid
+import pyperclip
 from retriever import retriever
 from llm_config import llm_config
 from loguru import logger
@@ -48,6 +49,8 @@ def initialize_session_state():
         st.session_state.selected_group_indicators = []
     if 'analysis_plan' not in st.session_state:
         st.session_state.analysis_plan = None
+    if 'saved_indicators' not in st.session_state:
+        st.session_state.saved_indicators = []
 
 def add_message_to_history(role, content):
     """チャット履歴にメッセージを追加"""
@@ -360,18 +363,19 @@ def get_indicator_details(indicator_name):
         st.error(f"指標詳細取得エラー: {str(e)}")
         return None
 
-def display_indicator_card(indicator_data, recommendation_reason, category_key, indicator_index, dynamic_explanation=None):
-    """単一の指標情報をカード形式で表示する"""
+def display_indicator_card(indicator_data, category_key, indicator_index):
+    """
+    単一の指標情報をカード形式で表示する（上下レイアウト版）
+    """
     if not indicator_data:
         st.error("指標データが無効です")
         return
 
-    with st.container():
-        col_icon, col_content, col_actions = st.columns([0.3, 5.5, 0.2])
-
+    with st.container(border=True):
+        # --- 上段：指標情報エリア ---
+        col_icon, col_content = st.columns([0.5, 9.5])
         with col_icon:
             st.markdown("📊")
-
         with col_content:
             indicator_code = indicator_data.get("koumoku_code", "")
             st.markdown(
@@ -379,37 +383,48 @@ def display_indicator_card(indicator_data, recommendation_reason, category_key, 
                 f'<span class="indicator-code">{indicator_code.lstrip("#")}</span></div>',
                 unsafe_allow_html=True
             )
-            
-            # 冗長な説明文を削除してカードをシンプル化
-            # if dynamic_explanation:
-            #     st.markdown(
-            #         f'<div class="indicator-reason">💡 {dynamic_explanation}</div>',
-            #         unsafe_allow_html=True
-            #     )
-            # else:
-            #     st.markdown(
-            #         f'<div class="indicator-reason">💡 {recommendation_reason}</div>',
-            #         unsafe_allow_html=True
-            #     )
-            
             path = f'{indicator_data["bunya_name"]} > {indicator_data["chuubunrui_name"]} > {indicator_data["shoubunrui_name"]}'
             st.markdown(
                 f'<div class="indicator-path">{path}</div>',
                 unsafe_allow_html=True
             )
 
-        with col_actions:
+        # --- 下段：アクションボタンエリア ---
+        st.markdown('<hr style="margin: 4px 0; border: 0.5px solid #e0e0e0;">', unsafe_allow_html=True)
+        action_col1, action_col2 = st.columns(2)
+
+        # 「採用リストへ」ボタン
+        with action_col1:
+            unique_key = f"add_{category_key}_{indicator_index}_{indicator_data.get('koumoku_code', '')}"
+            if st.button("✔ 採用リストへ", key=unique_key, type="primary", use_container_width=True):
+                koumoku_code = indicator_data.get('koumoku_code', '')
+                is_duplicate = any(saved.get('koumoku_code', '') == koumoku_code for saved in st.session_state.saved_indicators)
+                
+                if not is_duplicate:
+                    st.session_state.saved_indicators.append(indicator_data)
+                    if LOGGING_ENABLED:
+                        try:
+                            log_event(
+                                session_id=st.session_state.session_id,
+                                event_type='add_indicator',
+                                user_query=st.session_state.original_query,
+                                selected_indicator=indicator_data,
+                                llm_model=getattr(llm_config, 'current_model', 'unknown')
+                            )
+                        except Exception as e:
+                            logger.warning(f"⚠️ 指標追加ログ記録エラー: {str(e)}")
+                    st.toast(f"「{indicator_data.get('koumoku_name_full')}」を追加しました。")
+                    st.rerun() # サイドバーを即時更新するために再実行
+                else:
+                    st.toast("この指標は既に追加されています。")
+
+        # 「Power BIで開く」リンクボタン
+        with action_col2:
             base_url = "https://app.powerbi.com/groups/f57d1ec6-4658-47f7-9a93-08811e43127f/reports/1accacdd-98d0-4d03-9b25-48f4c9673ff4/02fa5822008e814cf7f2?experience=power-bi"
-            
             indicator_code = indicator_data.get("koumoku_code", "")
             cleaned_indicator_code = indicator_code.lstrip('#')
             power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{cleaned_indicator_code}'"
-
-            st.markdown(
-                f'<div style="text-align: center; padding-top: 5px;"><a href="{power_bi_url}" target="_blank" rel="noopener noreferrer" title="Power BIを新しいタブで開く">🔗</a></div>',
-                unsafe_allow_html=True
-            )
-        st.markdown('<hr style="margin: 4px 0; border: 0.5px solid #e0e0e0;">', unsafe_allow_html=True)
+            st.link_button("↗ Power BI で開く", power_bi_url, use_container_width=True)
 
 def handle_initial_stage():
     """初期段階：ユーザーからの最初の質問を受け付け"""
@@ -497,6 +512,7 @@ def handle_group_selection_stage():
                                 # セッション状態に「選択された1グループの指標のみ」を保存
                                 st.session_state.selected_group_indicators = group_indicators_df.to_dict('records')
                                 st.session_state.selected_group_code = selected_koumoku_code  # 完全なコードを保存
+                                st.session_state.summary_generated = False  # 要約生成フラグをリセット
                                 st.session_state.stage = STAGE_FINAL
                                 
                                 representative_name = group_indicators_df.iloc[0]['koumoku_name_full']
@@ -534,7 +550,7 @@ def handle_group_selection_stage():
 def reset_session_state():
     """セッション状態をリセットして新しい検索を開始"""
     logger.info("🔄 セッション状態をリセット")
-    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan', 'session_id']:
+    for key in ['stage', 'current_options', 'selected_perspective', 'original_query', 'available_indicators', 'selected_group_code', 'selected_group_indicators', 'analysis_plan', 'session_id', 'summary_generated', 'generated_summary_text']:
         if key in st.session_state:
             del st.session_state[key]
     
@@ -561,16 +577,24 @@ def handle_final_stage():
         
         # グループ要約を生成・表示
         if st.session_state.original_query:
-            with st.spinner("グループ要約を生成中..."):
-                group_summary = generate_group_summary(
-                    st.session_state.selected_group_indicators,
-                    st.session_state.original_query
-                )
-            
-            # 区切り線の追加とクリーンな概要表示
-            st.divider()
-            st.markdown(group_summary)
-            st.divider()
+            # st.session_state.summary_generatedがFalseの場合のみ要約を生成する
+            if not st.session_state.get('summary_generated', False):
+                with st.spinner("グループ要約を生成中..."):
+                    group_summary = generate_group_summary(
+                        st.session_state.selected_group_indicators,
+                        st.session_state.original_query
+                    )
+                    # 生成された要約をセッション状態に保存
+                    st.session_state.generated_summary_text = group_summary
+
+                # フラグをTrueにして、次回以降の再実行では生成しないようにする
+                st.session_state.summary_generated = True
+
+            # 保存された要約テキストを表示する
+            if 'generated_summary_text' in st.session_state:
+                st.divider()
+                st.markdown(st.session_state.generated_summary_text)
+                st.divider()
         
         # 指標件数に応じた表示処理の分岐
         total_indicators = len(st.session_state.selected_group_indicators)
@@ -590,7 +614,6 @@ def handle_final_stage():
             for i, indicator_data in enumerate(child_indicators):
                 display_indicator_card(
                     indicator_data, 
-                    "前方一致による関連指標", 
                     "group", 
                     i
                 )
@@ -599,7 +622,6 @@ def handle_final_stage():
             for i, indicator_data in enumerate(st.session_state.selected_group_indicators):
                 display_indicator_card(
                     indicator_data, 
-                    "代表指標", 
                     "group", 
                     i
                 )
@@ -725,10 +747,11 @@ def main():
             st.error("❌ データベースの読み込みに失敗しました")
             st.stop()
     
-    # LLMモデル選択
-    available_models = llm_config.get_available_models()
-    if available_models:
-        with st.sidebar:
+    # サイドバー
+    with st.sidebar:
+        # LLMモデル選択
+        available_models = llm_config.get_available_models()
+        if available_models:
             model_options = list(available_models.keys())
             current_model_display = next((k for k, v in available_models.items() if v == llm_config.current_model), None)
             selected_model_display = st.selectbox(
@@ -738,6 +761,79 @@ def main():
             selected_model = available_models[selected_model_display]
             if selected_model != llm_config.current_model:
                 llm_config.set_model(selected_model)
+        
+        # 保存した指標リスト
+        st.header("保存した指標")
+        
+        if st.session_state.saved_indicators:
+            for i, indicator_data in enumerate(st.session_state.saved_indicators):
+                # 指標名を表示
+                st.markdown(f"**{i+1}. {indicator_data.get('koumoku_name_full', '')}**")
+                st.markdown(f"_コード: {indicator_data.get('koumoku_code', '')}_")
+                
+                # Power BIリンクボタン
+                base_url = "https://app.powerbi.com/groups/f57d1ec6-4658-47f7-9a93-08811e43127f/reports/1accacdd-98d0-4d03-9b25-48f4c9673ff4/02fa5822008e814cf7f2?experience=power-bi"
+                indicator_code = indicator_data.get("koumoku_code", "")
+                cleaned_indicator_code = indicator_code.lstrip('#')
+                power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{cleaned_indicator_code}'"
+                
+                st.link_button("↗ Power BI", power_bi_url, use_container_width=True)
+                st.markdown("---")
+            
+            # ボタンを横並びに配置
+            sidebar_col1, sidebar_col2 = st.columns(2, gap="small")
+            
+            with sidebar_col1:
+                # 選択した指標をコピーボタン
+                if st.button("📋 コピー", type="secondary", use_container_width=True, help="選択した指標をクリップボードにコピー"):
+                    try:
+                        # 指標情報を整形してテキストを作成
+                        copy_text_lines = []
+                        copy_text_lines.append("【選択した指標一覧】")
+                        copy_text_lines.append("")
+                        
+                        for i, indicator in enumerate(st.session_state.saved_indicators, 1):
+                            koumoku_name = indicator.get('koumoku_name_full', '')
+                            koumoku_code = indicator.get('koumoku_code', '')
+                            copy_text_lines.append(f"{i}. {koumoku_name}")
+                            copy_text_lines.append(f"   コード: {koumoku_code}")
+                            copy_text_lines.append("")
+                        
+                        copy_text = "\n".join(copy_text_lines)
+                        
+                        # クリップボードにコピー
+                        pyperclip.copy(copy_text)
+                        
+                        # BigQueryロギング
+                        if LOGGING_ENABLED:
+                            try:
+                                current_model = getattr(llm_config, 'current_model', 'unknown')
+                                log_event(
+                                    session_id=st.session_state.session_id,
+                                    event_type='copy_selection',
+                                    user_query=st.session_state.original_query,
+                                    selected_indicator=st.session_state.saved_indicators,
+                                    llm_model=current_model
+                                )
+                            except Exception as e:
+                                logger.warning(f"⚠️ コピー選択ログ記録エラー（機能は継続します）: {str(e)}")
+                        
+                        # ユーザーへの通知
+                        st.toast("指標情報をクリップボードにコピーしました")
+                        
+                    except Exception as e:
+                        st.error(f"クリップボードへのコピーに失敗しました: {str(e)}")
+                        logger.error(f"❌ クリップボードコピーエラー: {str(e)}")
+            
+            with sidebar_col2:
+                # リストをクリアボタン
+                if st.button("🗑️ クリア", type="primary", use_container_width=True, help="採用リストをクリア"):
+                    st.session_state.saved_indicators = []
+                    st.toast("リストをクリアしました")
+                    st.rerun()
+        else:
+            st.info("まだ指標が採用されていません。")
+            st.markdown("気になる指標の「＋ 採用リストへ」ボタンをクリックして、このリストに保存できます。")
     
     # メインコンテンツ（上から下の流れ）
     if st.session_state.stage == STAGE_INITIAL:
