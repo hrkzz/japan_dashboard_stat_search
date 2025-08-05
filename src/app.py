@@ -393,10 +393,10 @@ def display_indicator_card(indicator_data, category_key, indicator_index):
         st.markdown('<hr style="margin: 4px 0; border: 0.5px solid #e0e0e0;">', unsafe_allow_html=True)
         action_col1, action_col2 = st.columns(2)
 
-        # 「採用リストへ」ボタン
+        # 「保存リストへ」ボタン
         with action_col1:
             unique_key = f"add_{category_key}_{indicator_index}_{indicator_data.get('koumoku_code', '')}"
-            if st.button("✔ 採用リストへ", key=unique_key, type="primary", use_container_width=True):
+            if st.button("✔ 保存リストへ", key=unique_key, type="primary", use_container_width=True):
                 koumoku_code = indicator_data.get('koumoku_code', '')
                 is_duplicate = any(saved.get('koumoku_code', '') == koumoku_code for saved in st.session_state.saved_indicators)
                 
@@ -766,78 +766,35 @@ def main():
             if selected_model != llm_config.current_model:
                 llm_config.set_model(selected_model)
         
-        # 保存した指標リスト
-        st.header("保存した指標")
+        # 保存リスト
+        st.header("保存リスト")
         
         if st.session_state.saved_indicators:
             for i, indicator_data in enumerate(st.session_state.saved_indicators):
-                # 指標名を表示
+                # 指標名のみを表示
                 st.markdown(f"**{i+1}. {indicator_data.get('koumoku_name_full', '')}**")
-                st.markdown(f"_コード: {indicator_data.get('koumoku_code', '')}_")
                 
-                # Power BIリンクボタン
-                base_url = "https://app.powerbi.com/groups/f57d1ec6-4658-47f7-9a93-08811e43127f/reports/1accacdd-98d0-4d03-9b25-48f4c9673ff4/02fa5822008e814cf7f2?experience=power-bi"
-                indicator_code = indicator_data.get("koumoku_code", "")
-                cleaned_indicator_code = indicator_code.lstrip('#')
-                power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{cleaned_indicator_code}'"
+                # ボタンを横並びに配置
+                btn_col1, btn_col2 = st.columns(2, gap="small")
                 
-                st.link_button("↗ Power BI", power_bi_url, use_container_width=True)
+                with btn_col1:
+                    # Power BIリンクボタン
+                    base_url = "https://app.powerbi.com/groups/f57d1ec6-4658-47f7-9a93-08811e43127f/reports/1accacdd-98d0-4d03-9b25-48f4c9673ff4/02fa5822008e814cf7f2?experience=power-bi"
+                    indicator_code = indicator_data.get("koumoku_code", "")
+                    cleaned_indicator_code = indicator_code.lstrip('#')
+                    power_bi_url = f"{base_url}&filter=social_demographic_pref_basic_bi/cat3_code eq '{cleaned_indicator_code}'"
+                    st.link_button("↗ リンク", power_bi_url, use_container_width=True)
+                
+                with btn_col2:
+                    # 削除ボタン
+                    if st.button("🗑️ 削除", key=f"delete_{i}", use_container_width=True):
+                        st.session_state.saved_indicators.pop(i)
+                        st.rerun()
+                
                 st.markdown("---")
-            
-            # ボタンを横並びに配置
-            sidebar_col1, sidebar_col2 = st.columns(2, gap="small")
-            
-            with sidebar_col1:
-                # 選択した指標をコピーボタン
-                if st.button("📋 コピー", type="secondary", use_container_width=True, help="選択した指標をクリップボードにコピー"):
-                    try:
-                        # 指標情報を整形してテキストを作成
-                        copy_text_lines = []
-                        copy_text_lines.append("【選択した指標一覧】")
-                        copy_text_lines.append("")
-                        
-                        for i, indicator in enumerate(st.session_state.saved_indicators, 1):
-                            koumoku_name = indicator.get('koumoku_name_full', '')
-                            koumoku_code = indicator.get('koumoku_code', '')
-                            copy_text_lines.append(f"{i}. {koumoku_name}")
-                            copy_text_lines.append(f"   コード: {koumoku_code}")
-                            copy_text_lines.append("")
-                        
-                        copy_text = "\n".join(copy_text_lines)
-                        
-                        # クリップボードにコピー
-                        pyperclip.copy(copy_text)
-                        
-                        # BigQueryロギング
-                        if LOGGING_ENABLED:
-                            try:
-                                current_model = getattr(llm_config, 'current_model', 'unknown')
-                                log_event(
-                                    session_id=st.session_state.session_id,
-                                    event_type='copy_selection',
-                                    user_query=st.session_state.original_query,
-                                    selected_indicator=st.session_state.saved_indicators,
-                                    llm_model=current_model
-                                )
-                            except Exception as e:
-                                logger.warning(f"⚠️ コピー選択ログ記録エラー（機能は継続します）: {str(e)}")
-                        
-                        # ユーザーへの通知
-                        st.toast("指標情報をクリップボードにコピーしました")
-                        
-                    except Exception as e:
-                        st.error(f"クリップボードへのコピーに失敗しました: {str(e)}")
-                        logger.error(f"❌ クリップボードコピーエラー: {str(e)}")
-            
-            with sidebar_col2:
-                # リストをクリアボタン
-                if st.button("🗑️ クリア", type="primary", use_container_width=True, help="採用リストをクリア"):
-                    st.session_state.saved_indicators = []
-                    st.toast("リストをクリアしました")
-                    st.rerun()
         else:
             st.info("まだ指標が採用されていません。")
-            st.markdown("気になる指標の「＋ 採用リストへ」ボタンをクリックして、このリストに保存できます。")
+            st.markdown("気になる指標の「＋ 保存リストへ」ボタンをクリックして、このリストに保存できます。")
     
     # メインコンテンツ（上から下の流れ）
     if st.session_state.stage == STAGE_INITIAL:

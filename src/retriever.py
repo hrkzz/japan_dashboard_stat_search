@@ -263,8 +263,7 @@ class HybridRetriever:
             
             logger.info(f"🔄 リランキング前の候補数: {len(candidate_indices)}")
             
-            # リランキング設定の問題を解決 - より多くの結果を返すように
-            final_top_k = min(top_k, 80)  # 40から80に増加
+            final_top_k = min(top_k, 40)  
             reranked_indices = self.rerank_results(query, candidate_indices, final_top_k)
             
             logger.info(f"✅ リランキング後の結果数: {len(reranked_indices)} (最大{final_top_k})")
