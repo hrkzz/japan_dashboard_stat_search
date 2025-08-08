@@ -4,6 +4,7 @@ import faiss
 from rank_bm25 import BM25Okapi
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import joblib
 import streamlit as st
 import json
 import os
@@ -14,6 +15,7 @@ from typing import List, Dict, Tuple
 from encoder import EmbeddingConfig
 from loguru import logger
 from config import config
+import time
 
 @st.cache_data(ttl=3600, show_spinner=False) # 1時間キャッシュする
 def load_db_from_github(zip_url: str):
@@ -87,31 +89,59 @@ class HybridRetriever:
         return True
     
     def _build_keyword_indices(self):
-        """BM25とTF-IDFインデックスを構築"""
+        """BM25/TF-IDF インデックスをロード。なければ初回のみ作成して永続化。"""
         try:
-            # 検索対象テキストの作成
-            search_texts = []
-            for _, row in self.df.iterrows():
-                text = f"{row['koumoku_name_full']} {row['bunya_name']} {row['chuubunrui_name']} {row['shoubunrui_name']} {row['definition']} {row['stat_name']}"
-                search_texts.append(text)
-            
-            # BM25インデックス
-            tokenized_texts = [text.split() for text in search_texts]
-            self.bm25 = BM25Okapi(tokenized_texts)
-            
-            # TF-IDFインデックス
-            self.tfidf_vectorizer = TfidfVectorizer(
-                max_features=10000,
-                ngram_range=(1, 2),
-                stop_words=None  # 日本語対応のため
-            )
-            self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(search_texts)
-            
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'vector_db'))
+            os.makedirs(base_dir, exist_ok=True)
+            bm25_path = os.path.join(base_dir, 'bm25.joblib')
+            tfidf_path = os.path.join(base_dir, 'tfidf.joblib')
+
+            loaded_any = False
+            if os.path.exists(bm25_path):
+                self.bm25 = joblib.load(bm25_path)
+                loaded_any = True
+            if os.path.exists(tfidf_path):
+                tfidf_bundle = joblib.load(tfidf_path)
+                self.tfidf_vectorizer = tfidf_bundle.get('vectorizer')
+                self.tfidf_matrix = tfidf_bundle.get('matrix')
+                loaded_any = True
+
+            if not loaded_any:
+                logger.info("🔧 キーワードインデックスが未検出のため初回構築を行います…")
+                # 検索用テキストを組み立て（以前のロジックを踏襲）
+                search_texts = []
+                for _, row in self.df.iterrows():
+                    text = f"{row['koumoku_name_full']} {row['bunya_name']} {row['chuubunrui_name']} {row['shoubunrui_name']} {row['definition']} {row['stat_name']}"
+                    search_texts.append(text)
+
+                # BM25
+                tokenized_texts = [text.split() for text in search_texts]
+                self.bm25 = BM25Okapi(tokenized_texts)
+
+                # TF-IDF
+                self.tfidf_vectorizer = TfidfVectorizer(
+                    max_features=10000,
+                    ngram_range=(1, 2),
+                    stop_words=None
+                )
+                self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(search_texts)
+
+                # 永続化
+                try:
+                    joblib.dump(self.bm25, bm25_path)
+                    joblib.dump({
+                        'vectorizer': self.tfidf_vectorizer,
+                        'matrix': self.tfidf_matrix
+                    }, tfidf_path)
+                    logger.info("✅ BM25/TF-IDF インデックスを保存しました。次回以降の起動が高速化されます。")
+                except Exception as persist_err:
+                    logger.warning(f"⚠️ インデックス保存に失敗: {persist_err}")
         except Exception as e:
-            st.error(f"キーワードインデックス構築エラー: {str(e)}")
+            logger.error(f"❌ キーワードインデックス読み込み/構築エラー: {str(e)}")
     
     def vector_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
         """ベクトル検索を実行"""
+        start_time = time.time()
         if self.faiss_index is None or self.embedding_config is None:
             logger.error("❌ ベクトル検索: インデックスまたはエンベディング設定が未初期化")
             return []
@@ -132,10 +162,12 @@ class HybridRetriever:
                 results.append((idx, score))
             
         logger.info(f"🔍 ベクトル検索完了: {len(results)}件 (要求:{top_k}件)")
+        logger.debug(f"⏱ vector_search took {(time.time()-start_time)*1000:.1f} ms")
         return results
     
     def keyword_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
         """BM25キーワード検索を実行"""
+        start_time = time.time()
         try:
             if self.bm25 is None:
                 logger.error("❌ BM25検索: BM25インデックスが未初期化")
@@ -150,6 +182,7 @@ class HybridRetriever:
             
             results = indexed_scores[:top_k]
             logger.info(f"🔍 BM25検索完了: {len(results)}件 (要求:{top_k}件)")
+            logger.debug(f"⏱ keyword_search took {(time.time()-start_time)*1000:.1f} ms")
             return results
             
         except Exception as e:
@@ -159,6 +192,7 @@ class HybridRetriever:
     
     def tfidf_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
         """TF-IDF検索を実行"""
+        start_time = time.time()
         try:
             if self.tfidf_vectorizer is None or self.tfidf_matrix is None:
                 logger.error("❌ TF-IDF検索: TF-IDFインデックスが未初期化")
@@ -172,6 +206,7 @@ class HybridRetriever:
             
             results = indexed_scores[:top_k]
             logger.info(f"🔍 TF-IDF検索完了: {len(results)}件 (要求:{top_k}件)")
+            logger.debug(f"⏱ tfidf_search took {(time.time()-start_time)*1000:.1f} ms")
             return results
             
         except Exception as e:
@@ -180,60 +215,53 @@ class HybridRetriever:
             return []
     
     def rerank_results(self, query: str, candidate_indices: List[int], top_k: int = 50) -> List[int]:
-        """シンプルなリランキング（クエリとの類似度ベース）"""
+        """シンプルなリランキング（NumPy/Pandas寄りに軽量化）。"""
+        start_time = time.time()
         try:
             query_lower = query.lower()
-            scored_candidates = []
-            
-            for idx in candidate_indices:
-                row = self.df.iloc[idx]
-                
-                # 各フィールドとのマッチング度を計算
-                score = 0
-                text_fields = [
-                    row['koumoku_name_full'],
-                    row['bunya_name'],
-                    row['chuubunrui_name'],
-                    row['shoubunrui_name'],
-                    row['definition'],
-                    row['stat_name']
-                ]
-                
-                for field in text_fields:
-                    if pd.isna(field):
-                        continue
-                    field_lower = str(field).lower()
-                    
-                    # 完全一致ボーナス
-                    if query_lower in field_lower:
-                        score += 2
-                    
-                    # 部分一致
-                    query_words = query_lower.split()
-                    field_words = field_lower.split()
-                    matches = len(set(query_words) & set(field_words))
-                    score += matches
-                
-                scored_candidates.append((idx, score))
-            
-            # スコア順にソートして上位を返す
-            scored_candidates.sort(key=lambda x: x[1], reverse=True)
-            return [idx for idx, _ in scored_candidates[:top_k]]
-            
+            # ベクトル化（最低限の高速化）
+            text_cols = ['koumoku_name_full', 'bunya_name', 'chuubunrui_name', 'shoubunrui_name', 'definition', 'stat_name']
+            # 対象行だけ抽出
+            sub_df = self.df.iloc[candidate_indices][text_cols].fillna("").astype(str)
+            # 完全一致: 各列に query を含むか
+            contain_mask = sub_df.applymap(lambda x: query_lower in x.lower())
+            contain_score = contain_mask.sum(axis=1) * 2
+            # 単語一致: 単純単語分割して集合積
+            q_words = set(query_lower.split())
+            def word_overlap_score(row: pd.Series) -> int:
+                s = 0
+                for v in row.values:
+                    fw = set(str(v).lower().split())
+                    s += len(q_words & fw)
+                return s
+            overlap_score = sub_df.apply(word_overlap_score, axis=1)
+            total = contain_score.add(overlap_score)
+            # スコア順
+            order = total.sort_values(ascending=False).index
+            # sub_df.index は元DataFrameのラベル。ラベル→候補配列内の位置を作る
+            index_to_pos = {label: pos for pos, label in enumerate(sub_df.index)}
+            ordered_candidate_indices = [candidate_indices[index_to_pos[label]] for label in order if label in index_to_pos][:top_k]
+            logger.debug(f"⏱ rerank_results took {(time.time()-start_time)*1000:.1f} ms")
+            return ordered_candidate_indices
         except Exception as e:
             st.error(f"リランキングエラー: {str(e)}")
             return candidate_indices[:top_k]
     
     def hybrid_search(self, query: str, top_k: int = 50, vector_weight: float = 0.6) -> List[Dict]:
-        """ハイブリッド検索を実行"""
+        """ハイブリッド検索を実行（検索を並列化、結合処理を効率化）。"""
+        total_start = time.time()
         try:
             logger.info(f"🔍 クエリ: '{query}' (top_k={top_k})")
-            
-            # 各検索手法を実行
-            # 各検索手法で結果を取得
-            vector_results = self.vector_search(query, top_k * 2)
-            bm25_results = self.keyword_search(query, top_k * 2)
-            tfidf_results = self.tfidf_search(query, top_k * 2)
+
+            # 並列実行（同期I/OのためThreadPoolで十分）
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                f_vec = ex.submit(self.vector_search, query, top_k * 2)
+                f_bm25 = ex.submit(self.keyword_search, query, top_k * 2)
+                f_tfidf = ex.submit(self.tfidf_search, query, top_k * 2)
+                vector_results = f_vec.result()
+                bm25_results = f_bm25.result()
+                tfidf_results = f_tfidf.result()
             
             logger.info(f"📊 検索結果数: ベクトル={len(vector_results)}, BM25={len(bm25_results)}, TF-IDF={len(tfidf_results)}")
             
@@ -257,9 +285,15 @@ class HybridRetriever:
                 normalized_score = score / max_tfidf if max_tfidf > 0 else 0
                 all_candidates[idx] = all_candidates.get(idx, 0) + normalized_score * keyword_weight
             
-            # スコア順にソート
-            sorted_candidates = sorted(all_candidates.items(), key=lambda x: x[1], reverse=True)
-            candidate_indices = [idx for idx, _ in sorted_candidates[:top_k * 2]]
+            # スコア順にソート（NumPyで高速化）
+            import numpy as _np
+            if all_candidates:
+                idxs = _np.fromiter(all_candidates.keys(), dtype=_np.int64)
+                vals = _np.fromiter(all_candidates.values(), dtype=_np.float32)
+                order = _np.argsort(vals)[::-1]
+                candidate_indices = idxs[order][: top_k * 2].tolist()
+            else:
+                candidate_indices = []
             
             logger.info(f"🔄 リランキング前の候補数: {len(candidate_indices)}")
             
@@ -299,6 +333,7 @@ class HybridRetriever:
             logger.info(f"📈 最終結果の分野分布: {dict(bunya_counts)}")
             logger.info(f"🎯 検索完了: {len(results)}件の指標を返却")
             
+            logger.debug(f"⏱ hybrid_search total took {(time.time()-total_start)*1000:.1f} ms")
             return results
             
         except Exception as e:

@@ -223,6 +223,12 @@ def render_group_selection_stage(state: StateManager, services: AnalysisService)
             st.markdown(group["group_description"])
 
 
+@st.cache_data(show_spinner=False)
+def _cached_group_summary_text(original_query: str, indicators: List[Dict[str, Any]]) -> str:
+    # ダミー: 呼び出し側で streaming 済みテキストを保存・再利用するためのキャッシュキー用
+    return "".join([original_query] + [i.get("koumoku_name_full", "") for i in indicators])
+
+
 def render_final_stage(state: StateManager, services: AnalysisService) -> None:
     st.markdown("### 📊 指標グループ詳細")
     indicators = state.get_selected_group_indicators()
@@ -238,28 +244,24 @@ def render_final_stage(state: StateManager, services: AnalysisService) -> None:
         if state.get_original_query():
             if not st.session_state.get("summary_generated", False):
                 with st.spinner("グループ要約を生成中..."):
-                    group_summary = services.generate_group_summary(indicators, state.get_original_query())
-                    state.set_group_summary_text(group_summary)
-            saved = state.get_group_summary_text()
-            if saved:
-                st.divider()
-                st.markdown(saved)
-                st.divider()
+                    stream_gen = services.stream_group_summary(indicators, state.get_original_query())
+                    result_text = st.write_stream(stream_gen)
+                    if result_text:
+                        state.set_group_summary_text(result_text)
+                        _ = _cached_group_summary_text(state.get_original_query(), indicators)
+                # ストリーミング直後は同一実行内で再表示しない（重複防止）
+            else:
+                saved = state.get_group_summary_text()
+                if saved:
+                    st.divider()
+                    st.markdown(saved)
+                    st.divider()
 
         total = len(indicators)
-        if total > 1:
-            child_indicators: List[Dict[str, Any]] = []
-            representative_code = state.get_selected_group_code()
-            for indicator_data in indicators:
-                if str(indicator_data.get("koumoku_code", "")) != str(representative_code):
-                    child_indicators.append(indicator_data)
-
-            st.markdown(f"### 📊 関連指標一覧（{len(child_indicators)}件）")
-            for i, indicator_data in enumerate(child_indicators):
-                display_indicator_card(state, indicator_data, "group", i)
-        else:
-            for i, indicator_data in enumerate(indicators):
-                display_indicator_card(state, indicator_data, "group", i)
+        # 代表指標を除外せず、全件をそのまま表示する
+        st.markdown(f"### 📊 関連指標一覧（{total}件）")
+        for i, indicator_data in enumerate(indicators):
+            display_indicator_card(state, indicator_data, "group", i)
     else:
         st.error("指標グループデータが見つかりません。")
 

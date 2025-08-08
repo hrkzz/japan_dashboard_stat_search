@@ -16,6 +16,9 @@ class LLMService:
     def generate(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
         return llm_config.generate_response(messages, temperature=temperature)
 
+    def stream(self, messages: List[Dict[str, str]], temperature: float = 0.3):
+        return llm_config.generate_response_stream(messages, temperature=temperature)
+
 
 class AnalysisService:
     """アプリの中核ビジネスロジックを集約。UI から独立。"""
@@ -123,6 +126,51 @@ class AnalysisService:
             logger.error(f"❌ 分析計画の生成エラー: {str(e)}")
             return None
 
+    def stream_analysis_plan_raw(self, query: str):
+        available_indicators = self.get_available_indicators_for_query(query)
+        system_prompt = f"""あなたは優秀なデータ分析の専門家です。ユーザーの質問を分析し、複数の「分析観点」と、各観点を探るための具体的な「指標グループ案」を提案してください。
+
+# 指示
+ユーザーの質問に対し、包括的な分析計画をJSON形式で出力してください。
+分析計画には、8〜10個の「分析観点（perspectives）」を含めてください。
+各「分析観点」には、その観点で具体的に何を見るべきかを示す「指標グループ案（suggested_groups）」を2〜3個含めてください。
+
+# 利用可能な統計指標の例
+{available_indicators}
+
+# 出力形式（必ずこのJSON構造に従うこと）
+{{
+  "analysis_plan": {{
+    "perspectives": [
+      {{
+        "perspective_title": "（例）教育環境の充実度",
+        "perspective_description": "地域の教育水準や子育て世代への教育支援がどの程度手厚いかを評価するための観点です。",
+        "suggested_groups": [
+          {{
+            "group_title": "（例）学校教育と施設",
+            "group_description": "公立学校の数、教員一人当たりの生徒数、図書館や体育館といった施設の状況から、基礎的な教育環境の質を把握します。"
+          }},
+          {{
+            "group_title": "（例）保育・待機児童問題",
+            "group_description": "保育所の数や待機児童の状況です。これが改善されれば、共働き世帯が安心して子育てできる環境が整っていると言えます。"
+          }}
+        ]
+      }}
+    ]
+  }}
+}}
+
+# 制約
+- JSON形式以外は絶対に出力しないでください。
+- 説明文は丁寧な「ですます調」で、ユーザーが理解しやすいように記述してください。
+"""
+        user_prompt = f"以下の質問について、詳細な分析計画をJSON形式で提案してください：\n\n{query}"
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        return self.llm.stream(messages, temperature=0.2)
+
     def generate_group_summary(self, group_indicators: List[Dict[str, Any]], user_query: str) -> str:
         logger.info(
             f"🤖 グループ要約生成開始: '{user_query}' for {len(group_indicators)} indicators"
@@ -167,6 +215,38 @@ class AnalysisService:
         except Exception as e:
             logger.error(f"❌ グループ要約生成エラー: {str(e)}")
             return "このグループの指標は、ユーザーの関心事に関連する重要な統計データを含んでいます。"
+
+    def stream_group_summary(self, group_indicators: List[Dict[str, Any]], user_query: str):
+        indicator_names = [i.get("koumoku_name_full", "") for i in group_indicators]
+        representative = group_indicators[0] if group_indicators else {}
+        bunya_info = (
+            f"{representative.get('bunya_name', '')} > {representative.get('chuubunrui_name', '')} > {representative.get('shoubunrui_name', '')}"
+        )
+        system_prompt = f"""あなたは統計分析の専門家です。ユーザーのクエリに対して、選択された指標グループがどのような分析の切り口を提供するかを説明してください。
+
+**ユーザーのクエリ**: {user_query}
+
+**指標グループに含まれる指標**: {', '.join(indicator_names[:10])}{'...' if len(indicator_names) > 10 else ''}
+
+**分野**: {bunya_info}
+
+**指標数**: {len(group_indicators)}件
+
+このグループの指標について、以下の観点から簡潔で分かりやすい要約文を生成してください：
+- ユーザーの関心事に対し、このグループがどのような分析の切り口を提供するか
+- このグループの指標を見ることで何がわかるのか
+- なぜこのグループがユーザーの関心事に重要なのか
+- 要約文は150-250文字程度で、丁寧な「ですます調」で記述
+
+出力は要約文のみを出力してください。JSON形式や他の形式は不要です。"""
+        user_prompt = (
+            f"上記の指標グループについて、ユーザーのクエリ「{user_query}」に対する要約説明文を生成してください。"
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        return self.llm.stream(messages, temperature=0.3)
 
     def generate_indicator_explanations(
         self, user_query: str, indicators_list: List[Dict[str, Any]]

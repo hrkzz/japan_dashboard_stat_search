@@ -127,5 +127,40 @@ class LLMConfig:
         except Exception as e:
             return f"LLM応答生成中にエラーが発生しました: {str(e)}"
 
+    def generate_response_stream(self, messages: list, temperature: float = 0.3):
+        """LLMからのストリーミング応答を生成するジェネレータを返す。"""
+        if not self.current_model:
+            yield "エラー: モデルが選択されていません"
+            return
+
+        try:
+            litellm_model = self.current_model
+            if self.current_model.startswith("gemini"):
+                litellm_model = f"gemini/{self.current_model}"
+
+            completion_args = {
+                "model": litellm_model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": True,
+            }
+            if self.current_model.startswith("ollama/"):
+                completion_args["api_base"] = self.api_keys['ollama']
+
+            for chunk in completion(**completion_args):
+                # LiteLLMのチャンク互換処理
+                piece = None
+                try:
+                    piece = chunk.choices[0].delta.content  # OpenAI形式
+                except Exception:
+                    try:
+                        piece = chunk.choices[0].message.get("content")
+                    except Exception:
+                        piece = None
+                if piece:
+                    yield piece
+        except Exception as e:
+            yield f"[stream error]: {str(e)}"
+
 # グローバルインスタンス
 llm_config = LLMConfig()

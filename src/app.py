@@ -1,5 +1,5 @@
-import streamlit as st
 import os
+import streamlit as st
 
 from retriever import retriever
 from llm_config import llm_config
@@ -20,7 +20,6 @@ from ui_components import (
 
 
 def main() -> None:
-    """Streamlit UI entry point. Keeps UI-only responsibilities."""
     st.set_page_config(page_title="統計指標検索アシスタント", page_icon="", layout="wide")
 
     # 外部 CSS 読み込み
@@ -87,18 +86,28 @@ def main() -> None:
         if user_input:
             state.add_message_to_history("user", user_input)
             with st.spinner("分析計画を調査中..."):
-                plan_result = services.generate_analysis_plan(user_input)
-                if plan_result and "analysis_plan" in plan_result:
-                    state.set_analysis_plan(plan_result["analysis_plan"])
-                    state.set_original_query(user_input)
-                    state.set_stage(STAGE_PERSPECTIVE_SELECTION)
-                    state.add_message_to_history(
-                        "assistant", f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？"
-                    )
-                else:
-                    state.add_message_to_history(
-                        "assistant", "申し訳ございません。分析計画の生成に失敗しました。もう一度お試しください。"
-                    )
+                # 画面には表示せずストリームを内部バッファに蓄積
+                stream_gen = services.stream_analysis_plan_raw(user_input)
+                parts = []
+                for piece in stream_gen:
+                    if piece:
+                        parts.append(piece)
+                streamed_text = "".join(parts)
+                import re as _re
+                import json as _json
+                m = _re.search(r"\{.*\}", streamed_text or "", _re.DOTALL)
+                if m:
+                    try:
+                        parsed = _json.loads(m.group())
+                        if parsed and "analysis_plan" in parsed:
+                            state.set_analysis_plan(parsed["analysis_plan"])
+                            state.set_original_query(user_input)
+                            state.set_stage(STAGE_PERSPECTIVE_SELECTION)
+                            state.add_message_to_history(
+                                "assistant", f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？"
+                            )
+                    except Exception:
+                        pass
             st.rerun()
     elif stage == STAGE_PERSPECTIVE_SELECTION:
         render_perspective_selection_stage(state)

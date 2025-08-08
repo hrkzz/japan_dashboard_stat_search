@@ -14,6 +14,7 @@ import os
 import json
 from datetime import datetime
 import argparse
+import joblib
 from encoder import embedding_config
 
 def verify_api_setup():
@@ -140,7 +141,7 @@ def build_faiss_index(embeddings):
     print(f"✅ FAISSインデックス構築完了: {index.ntotal:,}件")
     return index
 
-def save_database(df, faiss_index, output_dir='../vector_db'):
+def save_database(df, faiss_index, output_dir='../vector_db', bm25=None, tfidf_vectorizer=None, tfidf_matrix=None):
     """データベースをファイルに保存"""
     print(f"💾 データベースを保存中... ({output_dir})")
     
@@ -165,6 +166,13 @@ def save_database(df, faiss_index, output_dir='../vector_db'):
     
     with open(f"{output_dir}/metadata.json", 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
+    # 追加: BM25/TF-IDF を永続化
+    if bm25 is not None:
+        print("   BM25インデックスを保存中...")
+        joblib.dump(bm25, f"{output_dir}/bm25.joblib")
+    if tfidf_vectorizer is not None and tfidf_matrix is not None:
+        print("   TF-IDFベクタイザ/行列を保存中...")
+        joblib.dump({"vectorizer": tfidf_vectorizer, "matrix": tfidf_matrix}, f"{output_dir}/tfidf.joblib")
     
     print("✅ データベース保存完了")
 
@@ -195,8 +203,21 @@ def main():
     # FAISSインデックスの構築
     faiss_index = build_faiss_index(embeddings)
     
-    # データベースの保存
-    save_database(df, faiss_index, args.output_dir)
+    # 追加: BM25/TF-IDF を事前計算
+    try:
+        from rank_bm25 import BM25Okapi
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        print("   BM25/TF-IDF インデックスを構築中...")
+        tokenized_texts = [text.split() for text in search_texts]
+        bm25 = BM25Okapi(tokenized_texts)
+        tfidf_vectorizer = TfidfVectorizer(max_features=10000, ngram_range=(1, 2), stop_words=None)
+        tfidf_matrix = tfidf_vectorizer.fit_transform(search_texts)
+    except Exception as e:
+        print(f"⚠️ BM25/TF-IDF 構築に失敗: {e}")
+        bm25, tfidf_vectorizer, tfidf_matrix = None, None, None
+
+    # データベースの保存（BM25/TF-IDF も含める）
+    save_database(df, faiss_index, args.output_dir, bm25=bm25, tfidf_vectorizer=tfidf_vectorizer, tfidf_matrix=tfidf_matrix)
     
     print("=" * 50)
     print("🎉 ベクトルデータベース構築完了！")
