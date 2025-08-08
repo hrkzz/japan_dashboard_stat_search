@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Generator
 
 from loguru import logger
+import unicodedata
 
 from retriever import retriever
+import streamlit as st
 from llm_config import llm_config
 
 
@@ -27,13 +29,18 @@ class AnalysisService:
         self.llm = llm or LLMService()
 
     # --- Retrieval 補助 ---
-    def get_available_indicators_for_query(self, query: str) -> str:
+    def _normalize_query(self, text: str) -> str:
+        text = unicodedata.normalize("NFKC", (text or "").strip())
+        return " ".join(text.lower().split())
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _get_available_for_norm_query(_self, norm_query: str) -> str:
         try:
             if retriever.df is None:
                 retriever.load_vector_database()
 
-            logger.info(f"🔍 指標例取得開始: '{query}'")
-            search_results = retriever.hybrid_search(query, top_k=40)
+            logger.info(f"🔍 指標例取得開始: '{norm_query}'")
+            search_results = retriever.hybrid_search(norm_query, top_k=20)
 
             bunya_groups: Dict[str, List[str]] = {}
             for result in search_results:
@@ -51,12 +58,16 @@ class AnalysisService:
             indicator_examples: List[str] = []
             for bunya, indicators in bunya_groups.items():
                 indicator_examples.append(
-                    f"【{bunya}】({len(indicators)}件利用可能): {', '.join(indicators[:15])}"
+                    f"【{bunya}】({len(indicators)}件利用可能): {', '.join(indicators[:5])}"
                 )
 
             return "\n".join(indicator_examples)
         except Exception as e:
             return f"指標リスト取得エラー: {str(e)}"
+
+    def get_available_indicators_for_query(self, query: str) -> str:
+        norm = self._normalize_query(query)
+        return self._get_available_for_norm_query(norm)
 
     # --- LLM 生成系 ---
     def generate_analysis_plan(self, query: str) -> Optional[Dict[str, Any]]:
@@ -108,7 +119,7 @@ class AnalysisService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
-            response = self.llm.generate(messages, temperature=0.2)
+            response = self.llm.generate(messages, temperature=0.1)
 
             json_match = re.search(r"\{.*\}", response, re.DOTALL)
             if json_match:
@@ -169,7 +180,41 @@ class AnalysisService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        return self.llm.stream(messages, temperature=0.2)
+        return self.llm.stream(messages, temperature=0.1)
+
+    def stream_analysis_plan_titles_fast(self, query: str) -> Optional[Dict[str, Any]]:
+        """LLMストリームを早期解析し、perspective_title だけを素早く返す。
+
+        完全なJSONを待たず、出力中から "perspective_title" の値を抽出して最小構成の
+        analysis_plan を返す。
+        """
+        try:
+            gen = self.stream_analysis_plan_raw(query)
+            buffer: List[str] = []
+            titles: List[str] = []
+            for chunk in gen:
+                if not chunk:
+                    continue
+                buffer.append(chunk)
+                text = "".join(buffer)
+                # 粗い抽出: "perspective_title": "..." を拾う
+                for m in re.finditer(r'"perspective_title"\s*:\s*"(.*?)"', text):
+                    title = m.group(1)
+                    if title and title not in titles:
+                        titles.append(title)
+                # 一定数拾えたら早期返却
+                if len(titles) >= 8:
+                    break
+
+            if titles:
+                perspectives = [
+                    {"perspective_title": t, "perspective_description": "", "suggested_groups": []}
+                    for t in titles[:10]
+                ]
+                return {"analysis_plan": {"perspectives": perspectives}}
+            return None
+        except Exception:
+            return None
 
     def generate_group_summary(self, group_indicators: List[Dict[str, Any]], user_query: str) -> str:
         logger.info(
@@ -209,7 +254,7 @@ class AnalysisService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
-            response = self.llm.generate(messages, temperature=0.3)
+            response = self.llm.generate(messages, temperature=0.2)
             logger.info("✅ グループ要約生成成功")
             return response.strip()
         except Exception as e:

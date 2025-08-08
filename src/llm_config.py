@@ -29,13 +29,13 @@ class LLMConfig:
         if self.ollama_models:
             print(f"🦙 Ollama利用可能モデル: {[model['name'] for model in self.ollama_models]}")
         
-        # デフォルトモデルを設定（OpenAIを優先に変更）
-        if self.api_keys.get('openai'):
-            self.current_model = "gpt-4o-mini"
-            print("🚀 デフォルトモデル: OpenAI GPT-4o-mini")
-        elif self.api_keys.get('gemini'):
+        # デフォルトモデル: ユーザー環境では Gemini を優先（高速）
+        if self.api_keys.get('gemini'):
             self.current_model = "gemini-2.0-flash-exp"
             print("🚀 デフォルトモデル: Gemini 2.0 Flash")
+        elif self.api_keys.get('openai'):
+            self.current_model = "gpt-4o-mini"
+            print("🚀 デフォルトモデル: OpenAI GPT-4o-mini")
         elif self.ollama_models:
             self.current_model = f"ollama/{self.ollama_models[0]['name']}"
             print(f"🚀 デフォルトモデル: Ollama {self.ollama_models[0]['name']}")

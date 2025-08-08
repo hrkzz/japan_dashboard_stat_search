@@ -22,24 +22,22 @@ from ui_components import (
 def main() -> None:
     st.set_page_config(page_title="統計指標検索アシスタント", page_icon="", layout="wide")
 
-    # 外部 CSS 読み込み
-    try:
-        css_path = os.path.join(os.path.dirname(__file__), "assets", "style.css")
+    # 外部 CSS 読み込み（例外を避けるため存在チェックに変更）
+    css_path = os.path.join(os.path.dirname(__file__), "assets", "style.css")
+    if os.path.exists(css_path):
         with open(css_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except Exception:
-        pass
 
     state = StateManager()
     services = AnalysisService()
     state.initialize_session_state()
-
+    
     # データベースの初期化
     with st.spinner("📚 統計データベースを初期化中..."):
         if not retriever.load_vector_database():
             st.error("❌ データベースの読み込みに失敗しました")
             st.stop()
-
+    
     # サイドバー
     with st.sidebar:
         available_models = llm_config.get_available_models()
@@ -56,7 +54,7 @@ def main() -> None:
             selected_model = available_models[selected_model_display]
             if selected_model != llm_config.current_model:
                 llm_config.set_model(selected_model)
-
+        
         st.header("保存リスト")
         saved = state.get_saved_indicators()
         if saved:
@@ -77,7 +75,7 @@ def main() -> None:
         else:
             st.info("まだ指標が採用されていません。")
             st.markdown("気になる指標の「＋ 保存リストへ」ボタンをクリックして、このリストに保存できます。")
-
+    
     # メインコンテンツ
     stage = state.get_stage()
     if stage == STAGE_INITIAL:
@@ -85,32 +83,42 @@ def main() -> None:
         user_input = st.chat_input("分析したいテーマを入力してください（例：子育て環境を比較したい）")
         if user_input:
             state.add_message_to_history("user", user_input)
-            with st.spinner("分析計画を調査中..."):
-                # 画面には表示せずストリームを内部バッファに蓄積
-                stream_gen = services.stream_analysis_plan_raw(user_input)
-                parts = []
-                for piece in stream_gen:
-                    if piece:
-                        parts.append(piece)
-                streamed_text = "".join(parts)
-                import re as _re
-                import json as _json
-                m = _re.search(r"\{.*\}", streamed_text or "", _re.DOTALL)
-                if m:
-                    try:
-                        parsed = _json.loads(m.group())
-                        if parsed and "analysis_plan" in parsed:
-                            state.set_analysis_plan(parsed["analysis_plan"])
-                            state.set_original_query(user_input)
-                            state.set_stage(STAGE_PERSPECTIVE_SELECTION)
-                            state.add_message_to_history(
-                                "assistant", f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？"
-                            )
-                    except Exception:
-                        pass
+            with st.spinner("分析計画（暫定）を生成中..."):
+                # 高速: タイトルのみストリームから抽出して先に提示
+                fast_plan = services.stream_analysis_plan_titles_fast(user_input)
+                if fast_plan and fast_plan.get("analysis_plan", {}).get("perspectives"):
+                    state.set_analysis_plan(fast_plan["analysis_plan"])
+                    state.set_original_query(user_input)
+                    state.set_stage(STAGE_PERSPECTIVE_SELECTION)
+                    state.add_message_to_history(
+                        "assistant",
+                        f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？",
+                    )
+                else:
+                    # フォールバック: 完全版（内部でのみバッファリング）
+                    stream_gen = services.stream_analysis_plan_raw(user_input)
+                    parts = []
+                    for piece in stream_gen:
+                        if piece:
+                            parts.append(piece)
+                    import re as _re, json as _json
+                    m = _re.search(r"\{.*\}", "".join(parts) or "", _re.DOTALL)
+                    if m:
+                        try:
+                            parsed = _json.loads(m.group())
+                            if parsed and "analysis_plan" in parsed:
+                                state.set_analysis_plan(parsed["analysis_plan"])
+                                state.set_original_query(user_input)
+                                state.set_stage(STAGE_PERSPECTIVE_SELECTION)
+                                state.add_message_to_history(
+                                    "assistant",
+                                    f"承知いたしました。「{user_input}」についてですね。どのような観点で分析しますか？",
+                                )
+                        except Exception:
+                            pass
             st.rerun()
     elif stage == STAGE_PERSPECTIVE_SELECTION:
-        render_perspective_selection_stage(state)
+        render_perspective_selection_stage(state, services)
     elif stage == STAGE_GROUP_SELECTION:
         render_group_selection_stage(state, services)
     elif stage == STAGE_FINAL:
