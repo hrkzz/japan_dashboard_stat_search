@@ -5,11 +5,12 @@ OpenAI GPT-4o-mini vs Google Gemini 2.0 Flash 速度比較テスト
 
 import sys
 import os
-sys.path.append('src')
+# プロジェクトルートをパスに追加（src をパッケージとして解決するため）
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import time
 from loguru import logger
-from app import generate_ai_analysis
+from services import AnalysisService
 from llm_config import llm_config
 
 # ログ設定
@@ -32,7 +33,8 @@ def test_model_speed(model_name: str, model_display_name: str, test_query: str) 
         start_time = time.time()
         
         try:
-            result = generate_ai_analysis(test_query)
+            service = AnalysisService()
+            result = service.generate_ai_analysis(test_query)
             end_time = time.time()
             
             if result and 'analysis_perspectives' in result:

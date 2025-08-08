@@ -1,8 +1,7 @@
 """
 BigQuery ロギングモジュール (完全最終版)
 """
-
-import streamlit as st
+from config import config
 import json
 from datetime import datetime, timezone
 from loguru import logger
@@ -24,20 +23,25 @@ class BigQueryLogger:
     def _initialize_client(self):
         if not BIGQUERY_AVAILABLE: return
         try:
-            if "gcp_service_account" in st.secrets and "bigquery" in st.secrets:
-                credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
-                bq_config = st.secrets.bigquery
-                project_id, dataset_id, table_id = bq_config.get("project"), bq_config.get("dataset"), bq_config.get("table")
+            sa_info = config.get_gcp_service_account_info()
+            bq_conf = config.get_bigquery_config()
+            if sa_info and bq_conf:
+                credentials = service_account.Credentials.from_service_account_info(sa_info)
+                project_id, dataset_id, table_id = (
+                    bq_conf.get("project"),
+                    bq_conf.get("dataset"),
+                    bq_conf.get("table"),
+                )
 
                 if not all([project_id, dataset_id, table_id]):
-                    logger.warning("secrets.tomlの[bigquery]セクションにproject, dataset, tableのいずれかがありません。")
+                    logger.warning("BigQuery 設定(project, dataset, table)が不足しています。")
                     return
 
                 self.client = bigquery.Client(credentials=credentials, project=project_id)
                 self.table_ref = self.client.dataset(dataset_id).table(table_id)
                 logger.info("✅ BigQueryクライアントが正常に初期化されました。")
             else:
-                logger.warning("secrets.tomlに[gcp_service_account]または[bigquery]の設定が見つかりません。")
+                logger.warning("BigQuery の認証情報または設定が見つかりません。")
         except Exception as e:
             logger.error(f"❌ BigQueryクライアント初期化エラー: {e}")
             self.client = None

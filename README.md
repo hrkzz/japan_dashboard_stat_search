@@ -10,11 +10,18 @@
 
 ```
 ├── src/
-│   ├── llm_config.py        # LLM設定
-│   ├── encoder.py           # エンベディング設定とRAG用LLM設定
-│   ├── retriever.py         # ハイブリッド検索とリランキング
-│   ├── app.py              # Streamlit UI（メイン）
-│   └── build_vector_db.py  # ベクトルDB構築スクリプト
+│   ├── app.py               # (大幅にスリム化) StreamlitのUIエントリ
+│   ├── state_manager.py     # (新規) セッション状態管理クラス
+│   ├── ui_components.py     # (新規) UI描画関数群
+│   ├── services.py          # (新規) ビジネスロジック層
+│   ├── config.py            # (新規) 設定と機密情報の一元管理
+│   ├── bq_logger.py         # (修正) config.pyを利用
+│   ├── encoder.py           # (修正) config.pyを利用
+│   ├── llm_config.py        # (修正) config.pyを利用
+│   ├── retriever.py         # (修正) config.pyを利用
+│   ├── build_vector_db.py   # (修正) UIから独立
+│   └── assets/
+│       └── style.css        # (新規) CSSファイル
 ├── requirements.txt        # 依存関係
 ├── data/                   # 統計データ
 └── vector_db/             # 構築済みベクトルDB
@@ -91,16 +98,60 @@ GEMINI_API_KEY = "your_gemini_api_key"
 OLLAMA_BASE_URL = "http://localhost:11434"
 ```
 
+##### Ollamaを使用する場合の詳細セットアップ
+
+Ollamaを使用する場合は、以下の手順に従ってセットアップを行ってください：
+
+**1. Ollamaのインストール**
+
+公式サイト（https://ollama.ai/）からOllamaをダウンロードしてインストールしてください。
+
+**2. 使用するモデルのダウンロード**
+
+Ollamaサーバーを起動後、使用したいモデルを事前にダウンロードしておく必要があります：
+
+```bash
+# 推奨モデルのダウンロード例
+ollama pull llama3        # Meta Llama 3 (チャット用)
+ollama pull gemma         # Google Gemma (チャット用)
+ollama pull nomic-embed-text  # 埋め込みベクトル生成用
+
+# その他の利用可能なモデル
+ollama pull llama3.1      # Meta Llama 3.1
+ollama pull codellama     # コード生成特化
+ollama pull mistral       # Mistral AI
+```
+
+**3. Ollamaサーバーの起動確認**
+
+Ollamaサーバーが正常に起動していることを確認：
+
+```bash
+ollama list  # インストール済みモデルの一覧表示
+curl http://localhost:11434/api/tags  # API経由でモデル一覧を確認
+```
+
+**4. secrets.tomlの設定**
+
+`.streamlit/secrets.toml`にOllama設定を追加：
+
+```toml
+OLLAMA_BASE_URL = "http://localhost:11434"
+```
+
+**注意事項:**
+- Ollamaは初回起動時にモデルをダウンロードするため、インターネット接続が必要です
+- モデルサイズが大きいため（数GB〜数十GB）、十分なディスク容量を確保してください
+- ローカル実行のため、インターネット接続なしでも利用可能です（モデルダウンロード後）
+
 #### 4. ベクトルデータベースの構築
 ```bash
-cd src
-python build_vector_db.py
+python src/build_vector_db.py
 ```
 
 #### 5. アプリケーションの実行
 ```bash
-cd src
-streamlit run app.py
+streamlit run src/app.py
 ```
 
 ### 🛠️ 開発用コマンド

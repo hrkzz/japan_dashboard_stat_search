@@ -13,3 +13,4 @@ google-cloud-bigquery
 pyarrow
 pytz
 streamlit-extras
+ollama

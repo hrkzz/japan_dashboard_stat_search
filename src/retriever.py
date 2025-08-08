@@ -13,6 +13,7 @@ from io import BytesIO
 from typing import List, Dict, Tuple
 from encoder import EmbeddingConfig
 from loguru import logger
+from config import config
 
 @st.cache_data(ttl=3600, show_spinner=False) # 1時間キャッシュする
 def load_db_from_github(zip_url: str):
@@ -54,7 +55,6 @@ def load_db_from_github(zip_url: str):
 
     except Exception as e:
         logger.error(f"❌ GitHubからのDBロードエラー: {e}")
-        st.error(f"データベースのダウンロードに失敗しました: {e}")
         return None, None
 
 class HybridRetriever:
@@ -73,8 +73,8 @@ class HybridRetriever:
         if self.df is not None and self.faiss_index is not None:
             return True
 
-        # 自身のGitHub ReleasesのURLに書き換えてください
-        zip_url = "https://github.com/hrkzz/japan_dashboard_stat_search/releases/download/v1.0.0/vector_db.zip"
+        # Config 管理の ZIP URL（環境変数で上書き可能）
+        zip_url = config.get_vector_db_zip_url()
         
         # GitHubからDBをロード
         self.df, self.faiss_index = load_db_from_github(zip_url)

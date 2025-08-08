@@ -26,7 +26,7 @@ def verify_api_setup():
         return True
     except Exception as e:
         print(f"❌ API設定エラー: {str(e)}")
-        print("APIキーを.streamlit/secrets.tomlに設定してください")
+        print("環境変数 OPENAI_API_KEY / GEMINI_API_KEY または OLLAMA_BASE_URL を設定してください")
         return False
 
 def load_and_preprocess_data():

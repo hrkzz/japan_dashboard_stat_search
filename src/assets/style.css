@@ -1,0 +1,22 @@
+.main > div { padding-top: 2rem; }
+.stTextInput > div > div > input { border-radius: 8px; border: 2px solid #e0e0e0; }
+
+/* 指標詳細カード用スタイル */
+.indicator-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; margin: 4px 0; background-color: #fafafa; transition: box-shadow 0.2s; }
+.indicator-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.indicator-title { font-size: 1.1em; font-weight: bold; color: #1f77b4; margin: 4px 0; }
+.indicator-code { color: #666; font-size: 0.9em; font-weight: bold; }
+.indicator-path { color: #888; font-size: 0.85em; margin: 2px 0; }
+.indicator-reason { color: #f39c12; font-size: 0.9em; margin: 4px 0; }
+
+/* 選択肢カード用スタイル */
+.stContainer > div[data-testid="column"] { padding: 0 8px; }
+.selection-card { border-radius: 12px; border: 2px solid #e8f4fd; background: linear-gradient(135deg, #ffffff 0%, #f8fcff 100%); transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+.selection-card:hover { border-color: #1f77b4; box-shadow: 0 4px 12px rgba(31, 119, 180, 0.15); transform: translateY(-2px); }
+.card-title { color: #1f77b4; font-weight: 600; margin-bottom: 8px; font-size: 1.1em; }
+.card-description { color: #666; font-size: 0.9em; line-height: 1.4; margin-top: 8px; }
+
+/* ボタンのスタイル調整 */
+.stButton > button[kind="primary"] { background: linear-gradient(135deg, #1f77b4 0%, #1e88e5 100%); border: none; border-radius: 8px; font-weight: 600; box-shadow: 0 2px 4px rgba(31, 119, 180, 0.3); transition: all 0.2s ease; }
+.stButton > button[kind="primary"]:hover { background: linear-gradient(135deg, #1565c0 0%, #1976d2 100%); box-shadow: 0 4px 8px rgba(31, 119, 180, 0.4); transform: translateY(-1px); }
+

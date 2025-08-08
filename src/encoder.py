@@ -1,9 +1,9 @@
 import numpy as np
 import faiss
 from litellm import embedding
-import streamlit as st
 import os
 from typing import List, Union
+from config import config
 
 class EmbeddingConfig:
     """エンベディングの設定と生成を管理するクラス"""
@@ -15,7 +15,11 @@ class EmbeddingConfig:
         """使用するエンベディングモデルを決定"""
         # APIキーを設定
         api_key = self._get_api_key()
-        if api_key.get('openai'):
+        
+        # Ollamaが利用可能な場合は優先的に使用
+        if api_key.get('ollama'):
+            return "ollama/nomic-embed-text"
+        elif api_key.get('openai'):
             os.environ["OPENAI_API_KEY"] = api_key['openai']
             return "text-embedding-3-small"
         elif api_key.get('gemini'):
@@ -25,39 +29,12 @@ class EmbeddingConfig:
             return "text-embedding-3-small"  # デフォルト
     
     def _get_api_key(self):
-        """APIキーを取得（Streamlit secrets.toml または環境変数）"""
-        api_keys = {}
-        
-        try:
-            # Streamlit内での実行の場合
-            if "OPENAI_API_KEY" in st.secrets:
-                api_keys['openai'] = st.secrets["OPENAI_API_KEY"]
-            if "GEMINI_API_KEY" in st.secrets:
-                api_keys['gemini'] = st.secrets["GEMINI_API_KEY"]
-        except:
-            # Streamlit外での実行の場合、直接secrets.tomlファイルを読む
-            try:
-                import toml
-                secrets_path = os.path.join(os.path.dirname(__file__), '..', '.streamlit', 'secrets.toml')
-                if os.path.exists(secrets_path):
-                    with open(secrets_path, 'r') as f:
-                        secrets = toml.load(f)
-                    if 'OPENAI_API_KEY' in secrets:
-                        api_keys['openai'] = secrets['OPENAI_API_KEY']
-                    if 'GEMINI_API_KEY' in secrets:
-                        api_keys['gemini'] = secrets['GEMINI_API_KEY']
-            except ImportError:
-                print("tomlライブラリがインストールされていません")
-            except Exception as e:
-                print(f"secrets.toml読み込みエラー: {e}")
-        
-        # 環境変数もチェック
-        if not api_keys.get('openai') and os.getenv('OPENAI_API_KEY'):
-            api_keys['openai'] = os.getenv('OPENAI_API_KEY')
-        if not api_keys.get('gemini') and os.getenv('GEMINI_API_KEY'):
-            api_keys['gemini'] = os.getenv('GEMINI_API_KEY')
-        
-        return api_keys
+        """APIキーを取得（Config 経由）"""
+        return {
+            'openai': config.get_openai_key(),
+            'gemini': config.get_gemini_key(),
+            'ollama': config.get_ollama_base_url(),
+        }
     
     def get_embeddings(self, texts: Union[str, List[str]]) -> np.ndarray:
         """テキストのエンベディングを生成"""
@@ -69,10 +46,19 @@ class EmbeddingConfig:
             if not self.embedding_model:
                 self.embedding_model = self._get_embedding_model()
             
-            response = embedding(
-                model=self.embedding_model,
-                input=texts
-            )
+            # embedding関数の引数を準備
+            embedding_args = {
+                "model": self.embedding_model,
+                "input": texts
+            }
+            
+            # Ollamaモデルの場合はapi_baseを追加
+            if self.embedding_model.startswith('ollama/'):
+                api_keys = self._get_api_key()
+                if api_keys.get('ollama'):
+                    embedding_args["api_base"] = api_keys['ollama']
+            
+            response = embedding(**embedding_args)
             
             embeddings = []
             # LiteLLMの返り値構造に対応
@@ -96,7 +82,6 @@ class EmbeddingConfig:
                     embeddings = [response]
             
             if not embeddings:
-                st.error("エンベディングデータが取得できませんでした")
                 return np.array([])
             
             embeddings_array = np.array(embeddings, dtype=np.float32)
@@ -105,7 +90,7 @@ class EmbeddingConfig:
             return embeddings_array
             
         except Exception as e:
-            st.error(f"エンベディング生成エラー: {str(e)}")
+            # 例外は空配列で返す（UI 非依存）
             return np.array([])
     
     def get_single_embedding(self, text: str) -> np.ndarray:
@@ -114,4 +99,4 @@ class EmbeddingConfig:
         return embeddings[0] if len(embeddings) > 0 else np.array([])
 
 # グローバルインスタンス
-embedding_config = EmbeddingConfig() 
+embedding_config = EmbeddingConfig()
