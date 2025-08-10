@@ -27,7 +27,8 @@ class LLMConfig:
         
         # Ollamaモデルの取得状況をログ出力
         if self.ollama_models:
-            print(f"🦙 Ollama利用可能モデル: {[model['name'] for model in self.ollama_models]}")
+            model_names = [name for name in (self._extract_ollama_model_name(m) for m in self.ollama_models) if name]
+            print(f"🦙 Ollama利用可能モデル: {model_names}")
         
         # デフォルトモデル: ユーザー環境では Gemini を優先（高速）
         if self.api_keys.get('gemini'):
@@ -37,8 +38,12 @@ class LLMConfig:
             self.current_model = "gpt-4o-mini"
             print("🚀 デフォルトモデル: OpenAI GPT-4o-mini")
         elif self.ollama_models:
-            self.current_model = f"ollama/{self.ollama_models[0]['name']}"
-            print(f"🚀 デフォルトモデル: Ollama {self.ollama_models[0]['name']}")
+            first_name = self._extract_ollama_model_name(self.ollama_models[0])
+            if first_name:
+                self.current_model = f"ollama/{first_name}"
+                print(f"🚀 デフォルトモデル: Ollama {first_name}")
+            else:
+                self.current_model = None
         else:
             self.current_model = None
             print("❌ 利用可能なAPIキーがありません")
@@ -75,7 +80,9 @@ class LLMConfig:
         
         # Ollamaモデルを追加
         for model in self.ollama_models:
-            model_name = model['name']
+            model_name = self._extract_ollama_model_name(model)
+            if not model_name:
+                continue
             display_name = f"Ollama: {model_name}"
             available_models[display_name] = f"ollama/{model_name}"
         
@@ -162,5 +169,41 @@ class LLMConfig:
         except Exception as e:
             yield f"[stream error]: {str(e)}"
 
+    def _extract_ollama_model_name(self, model: Any) -> Optional[str]:
+        """Ollamaの`client.list()`で返るモデル要素からモデル名を取り出す。
+        - dict型の場合: 'name' 優先、なければ 'model' を参照
+        - オブジェクトの場合: `.name` 優先、なければ `.model` を参照
+        取得できなければ None を返す。
+        """
+        try:
+            # dict 互換
+            if isinstance(model, dict):
+                name = model.get("name") or model.get("model")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+                return None
+            # 属性アクセス
+            name_attr = getattr(model, "name", None) or getattr(model, "model", None)
+            if isinstance(name_attr, str) and name_attr.strip():
+                return name_attr.strip()
+            # __getitem__ に対応した型（ollama._types）の可能性
+            try:
+                name_key = None
+                for key in ("name", "model"):
+                    try:
+                        value = model[key]  # type: ignore[index]
+                        if isinstance(value, str) and value.strip():
+                            name_key = value.strip()
+                            break
+                    except Exception:
+                        continue
+                return name_key
+            except Exception:
+                return None
+        except Exception:
+            return None
+
 # グローバルインスタンス
 llm_config = LLMConfig()
+
+    

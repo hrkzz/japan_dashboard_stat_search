@@ -48,3 +48,6 @@ vector_db/
 
 # Environment variables
 .env 
+
+# models
+models/

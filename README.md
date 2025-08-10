@@ -114,12 +114,6 @@ Ollamaサーバーを起動後、使用したいモデルを事前にダウン�
 # 推奨モデルのダウンロード例
 ollama pull llama3        # Meta Llama 3 (チャット用)
 ollama pull gemma         # Google Gemma (チャット用)
-ollama pull nomic-embed-text  # 埋め込みベクトル生成用
-
-# その他の利用可能なモデル
-ollama pull llama3.1      # Meta Llama 3.1
-ollama pull codellama     # コード生成特化
-ollama pull mistral       # Mistral AI
 ```
 
 **3. Ollamaサーバーの起動確認**
@@ -153,6 +147,98 @@ python src/build_vector_db.py
 ```bash
 streamlit run src/app.py
 ```
+
+### 🦙 Ollama をバックグラウンドで起動する方法（Linux/WSL2）
+
+Ollama はデフォルトでポート `11434` を使用します。バックグラウンド常駐の代表的な方法を示します。
+
+#### 1) 一時的なバックグラウンド起動（nohup）
+
+```bash
+# 既に別プロセスがポートを使用していないか確認（任意）
+ss -lntp | grep 11434 || true
+
+# バックグラウンド起動
+nohup ollama serve > ~/.ollama/serve.log 2>&1 &
+
+# 動作確認
+curl http://localhost:11434/api/tags | jq .
+```
+
+停止する場合は次のようにします（権限エラーが出る場合は systemd 管理下の可能性が高いです）：
+
+```bash
+# systemd で動いている場合（推奨）
+sudo systemctl stop ollama || true
+
+# nohup で自分のユーザーから起動した場合（フォールバック）
+pkill -f "ollama serve" || true
+```
+
+#### 2) systemd で常駐サービス化（WSL2/systemd 有効時）
+
+```ini
+# /etc/systemd/system/ollama.service
+[Unit]
+Description=Ollama Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ollama serve
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/ollama.log
+StandardError=append:/var/log/ollama.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+有効化と起動：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable ollama
+sudo systemctl start ollama
+systemctl status ollama | cat
+```
+
+ポート衝突エラー（`bind: address already in use`）が出る場合の対処：
+
+```bash
+# 11434 を使っているプロセスを特定
+sudo lsof -i :11434 -nP || ss -lntp | grep 11434 || true
+
+# 必要に応じて該当プロセスを停止
+sudo kill -9 <PID>
+
+# もしくは既存の Ollama を停止
+sudo systemctl stop ollama || pkill -f "ollama serve" || true
+```
+
+WSL2 で systemd が無効な場合は、`/etc/wsl.conf` に以下を追加して再起動してください。
+
+```ini
+[boot]
+systemd=true
+```
+
+設定後、PowerShell から次を実行：
+
+```powershell
+wsl --shutdown
+```
+
+#### 3) アプリ側の接続確認
+
+`.streamlit/secrets.toml` に以下が設定されていることを確認：
+
+```toml
+OLLAMA_BASE_URL = "http://localhost:11434"
+```
+
+アプリ起動時に「✅ Ollama接続成功: n個のモデルが利用可能」が表示されれば接続は正常です。
 
 ### 🛠️ 開発用コマンド
 
