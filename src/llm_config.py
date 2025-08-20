@@ -21,12 +21,12 @@ class LLMConfig:
             print(f"  {key_type}: {'設定済み' if key_value else '未設定'} ({len(key_value) if key_value else 0}文字)")
         
         # デフォルトモデルを設定（OpenAIを優先に変更）
-        if self.api_keys.get('openai'):
-            self.current_model = "gpt-4o-mini"
-            print("🚀 デフォルトモデル: OpenAI GPT-4o-mini")
-        elif self.api_keys.get('gemini'):
+        if self.api_keys.get('gemini'):
             self.current_model = "gemini-2.0-flash-exp"
             print("🚀 デフォルトモデル: Gemini 2.0 Flash")
+        elif self.api_keys.get('openai'):
+            self.current_model = "gpt-4o-mini"
+            print("🚀 デフォルトモデル: OpenAI GPT-4o-mini")
         else:
             self.current_model = None
             print("❌ 利用可能なAPIキーがありません")
